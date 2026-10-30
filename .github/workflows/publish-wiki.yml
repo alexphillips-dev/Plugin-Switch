@@ -4,7 +4,6 @@ on:
     branches: [dev]
     paths:
       - 'wiki/**'
-      - 'wiki-bootstrap.tar.gz'
       - 'tools/wiki_validate.py'
       - '.github/workflows/publish-wiki.yml'
   workflow_dispatch:
@@ -21,22 +20,6 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
-      - name: Seed version-controlled Wiki pages
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -f wiki/Home.md ]]; then
-            test -s wiki-bootstrap.tar.gz
-            tar -tzf wiki-bootstrap.tar.gz | grep -qx 'wiki/Home.md'
-            tar -xzf wiki-bootstrap.tar.gz -C .
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add wiki/
-            if ! git diff --cached --quiet; then
-              git commit -m "docs: add version-controlled Plugin Switch Wiki"
-              git push origin HEAD:dev
-            fi
-          fi
       - name: Validate Wiki source and navigation
         run: python3 tools/wiki_validate.py wiki
       - name: Publish pages to GitHub Wiki repository

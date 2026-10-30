@@ -2,13 +2,220 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
 <!ENTITY author "alexphillips-dev">
-<!ENTITY version "2026.10.29.3">
+<!ENTITY version "2026.10.29.4">
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>2026.10.29.3 - Fix Unraid install/update file refresh with verified SHA-256 payloads.</CHANGES>
+<CHANGES>2026.10.29.4 - Add read-only discovery, hash-pinned compatibility profiles, diagnostics and safe live gating.</CHANGES>
+<FILE Name="/usr/local/emhttp/plugins/&name;/Compatibility.php"><INLINE><![CDATA[<?php
+declare(strict_types=1);
+
+/**
+ * Read-only compatibility inventory for Unraid 7 plugins.
+ *
+ * Discovery is evidence, NOT authorization to execute inferred commands.
+ * Only an exact manifest fingerprint plus a bundled, hash-pinned adapter can
+ * elevate a verified profile to live-capable. Local administrator adapters
+ * are an independent explicit trust path managed by Controller.php.
+ */
+final class PluginSwitchCompatibility
+{
+    private string $catalog;
+    private string $adapterDir;
+    private string $cacheDir;
+    private int $ttl;
+
+    public function __construct(
+        string $catalog = __DIR__ . '/profiles.json',
+        string $adapterDir = __DIR__ . '/builtin-adapters',
+        string $cacheDir = '/run/plugin-switch/discovery',
+        int $ttl = 300
+    ) {
+        $this->catalog = $catalog;
+        $this->adapterDir = rtrim($adapterDir, '/');
+        $this->cacheDir = rtrim($cacheDir, '/');
+        $this->ttl = max(0, $ttl);
+    }
+
+    public static function protectedId(string $id): bool
+    {
+        return in_array(strtolower($id), ['plugin.switch.plg', 'unraidserver.plg'], true);
+    }
+
+    private function catalog(): array
+    {
+        if (!is_file($this->catalog) || is_link($this->catalog)) return [];
+        $data = @file_get_contents($this->catalog);
+        if (!is_string($data) || strlen($data) > 131072) return [];
+        $parsed = json_decode($data, true);
+        if (!is_array($parsed) || ($parsed['schema_version'] ?? null) !== 1) return [];
+        return is_array($parsed['profiles'] ?? null) ? $parsed['profiles'] : [];
+    }
+
+    private function allProfilesFor(string $id): array
+    {
+        return array_values(array_filter($this->catalog(), static function ($profile) use ($id): bool {
+            return is_array($profile) && ($profile['id'] ?? '') === $id;
+        }));
+    }
+
+    /**
+     * Profiles cannot declare arbitrary commands. They only identify an
+     * adapter file already packaged in Plugin Switch, pinned by checksum.
+     */
+    public function verifiedAdapter(string $id, string $manifest): ?array
+    {
+        if (self::protectedId($id) || !is_file($manifest) || is_link($manifest)) return null;
+        $hash = @hash_file('sha256', $manifest);
+        if (!is_string($hash)) return null;
+        foreach ($this->allProfilesFor($id) as $profile) {
+            if (!is_string($profile['manifest_sha256'] ?? null) ||
+                !hash_equals(strtolower($profile['manifest_sha256']), $hash)) continue;
+            $name = $profile['adapter'] ?? null;
+            $sha = $profile['adapter_sha256'] ?? null;
+            if (!is_string($name) || preg_match('/^[a-z0-9][a-z0-9._-]*\\.sh$/D', $name) !== 1 ||
+                !is_string($sha) || preg_match('/^[0-9a-f]{64}$/D', $sha) !== 1) continue;
+            $path = $this->adapterDir . '/' . $name;
+            if (!is_file($path) || is_link($path) || @filesize($path) > 65536 ||
+                @fileowner($path) !== 0 || ((@fileperms($path) ?: 0) & 0022) !== 0) continue;
+            $actual = @hash_file('sha256', $path);
+            if (!is_string($actual) || !hash_equals($sha, $actual)) continue;
+            return ['path' => $path, 'profile' => (string)($profile['name'] ?? $id)];
+        }
+        return null;
+    }
+
+    private static function uniqueLimited(array $values, int $max): array
+    {
+        return array_slice(array_values(array_unique($values)), 0, $max);
+    }
+
+    /** @return array<string,mixed> */
+    public function scan(string $id, string $manifest, bool $force = false): array
+    {
+        $result = [
+            'classification' => self::protectedId($id) ? 'protected' : 'next-boot',
+            'reason' => 'No audited, reversible live-control method has been verified.',
+            'services' => [],
+            'signals' => [],
+            'profile' => null,
+            'profile_status' => 'none',
+            'scanned_at' => gmdate('c'),
+        ];
+        if (self::protectedId($id)) {
+            $result['reason'] = 'Core or Plugin Switch components cannot be disabled.';
+            return $result;
+        }
+        if (!preg_match('/^[a-zA-Z0-9][a-zA-Z0-9._-]*\\.plg$/D', $id) ||
+            !is_file($manifest) || is_link($manifest)) return $result;
+        $size = @filesize($manifest);
+        if ($size === false || $size <= 0 || $size > 2097152) {
+            $result['reason'] = 'Manifest is missing, empty or larger than the safe scanning limit.';
+            return $result;
+        }
+        $content = @file_get_contents($manifest);
+        if (!is_string($content)) return $result;
+        $fingerprint = hash('sha256', $content);
+        $registryHash = is_file($this->catalog) ? (@hash_file('sha256', $this->catalog) ?: '') : '';
+        $cacheKey = hash('sha256', $id . ':' . $fingerprint . ':' . $registryHash);
+        $cacheFile = $this->cacheDir . '/' . $id . '.json';
+        if (!$force && $this->ttl > 0 && is_file($cacheFile) && !is_link($cacheFile) &&
+            @filesize($cacheFile) < 32768 && time() - (int)@filemtime($cacheFile) < $this->ttl) {
+            $cache = json_decode((string)@file_get_contents($cacheFile), true);
+            if (is_array($cache) && ($cache['key'] ?? null) === $cacheKey &&
+                is_array($cache['result'] ?? null)) return $cache['result'];
+        }
+
+        $result['manifest_sha256'] = $fingerprint;
+        $old = libxml_use_internal_errors(true);
+        // LIBXML_NONET and no LIBXML_NOENT: do not fetch external entities or
+        // expand arbitrary entity content while inspecting third-party plugins.
+        $xml = @simplexml_load_string($content, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
+        libxml_clear_errors();
+        libxml_use_internal_errors($old);
+        if ($xml === false || $xml->getName() !== 'PLUGIN') {
+            $result['reason'] = 'Manifest XML could not be safely parsed.';
+            return $result;
+        }
+
+        $text = '';
+        $methods = [];
+        $files = 0;
+        foreach ($xml->FILE as $file) {
+            if (++$files > 300) break;
+            $attrs = $file->attributes();
+            $name = (string)($attrs['Name'] ?? '');
+            $method = (string)($attrs['Method'] ?? 'install');
+            $methods[] = $method;
+            $text .= "\n" . substr($name, 0, 1024) . "\n" .
+                substr((string)($attrs['Run'] ?? ''), 0, 1024) . "\n" .
+                substr((string)($file->INLINE ?? ''), 0, 32768);
+            if (strlen($text) > 262144) break;
+        }
+        // The evidence is a bounded list of literal references. No service
+        // command is ever executed by the discovery engine.
+        preg_match_all('#/(?:etc/rc\\.d/rc\\.|etc/init\\.d/)([a-zA-Z0-9._-]{2,64})#', $text, $matches);
+        $result['services'] = self::uniqueLimited($matches[1] ?? [], 12);
+        $patterns = [
+            'kernel-module' => '/\\b(?:modprobe|insmod|rmmod|depmod)\\b/i',
+            'network-stack' => '/\\b(?:iptables|nft|ip\\s+(?:route|rule)|wg-quick|ipsec)\\b/i',
+            'storage-stack' => '/\\b(?:zpool|zfs\\s+|mdadm|mount|umount)\\b/i',
+            'global-boot-hooks' => '#(?:/etc/rc\\.d/rc\\.local|/boot/config/go|/etc/udev/)#i',
+            'scheduler' => '/(?:\\bcrontab\\b|\\bcron\\b|update_cron)/i',
+            'gui-files' => '#/usr/local/emhttp/plugins/#i',
+            'destructive-remove' => '/\\b(?:rm\\s+-rf|wipefs|mkfs\\.)\\b/i',
+        ];
+        foreach ($patterns as $label => $regex) {
+            if (preg_match($regex, $text) === 1) $result['signals'][] = $label;
+        }
+        if (in_array('remove', $methods, true) ||
+            count(array_filter($methods, static fn($m) => str_contains($m, 'remove'))) > 0) {
+            $result['signals'][] = 'uninstall-hook';
+        }
+        $profiles = $this->allProfilesFor($id);
+        if ($profiles) {
+            $result['profile_status'] = 'manifest-mismatch';
+            $result['signals'][] = 'profile-version-drift';
+        }
+        $verified = $this->verifiedAdapter($id, $manifest);
+        if ($verified) {
+            $result['classification'] = 'candidate';
+            $result['profile_status'] = 'verified';
+            $result['profile'] = $verified['profile'];
+            $result['reason'] = 'Manifest and bundled adapter match a reviewed profile; runtime status must also pass.';
+        } elseif ($result['services'] !== []) {
+            $result['classification'] = 'candidate';
+            $result['reason'] = 'Potential service controls discovered; reversibility and dependencies are not verified.';
+        } elseif ($profiles) {
+            $result['classification'] = 'candidate';
+            $result['reason'] = 'Previously reviewed manifest has changed; profile must be revalidated before live control.';
+        }
+        $result['signals'] = self::uniqueLimited($result['signals'], 12);
+        if (is_dir($this->cacheDir) || @mkdir($this->cacheDir, 0700, true)) {
+            if (!is_link($cacheFile)) {
+                $payload = json_encode(['key' => $cacheKey, 'result' => $result], JSON_INVALID_UTF8_SUBSTITUTE);
+                if ($payload !== false) {
+                    $tmp = @tempnam($this->cacheDir, '.scan-');
+                    if ($tmp !== false) {
+                        @chmod($tmp, 0600);
+                        if (@file_put_contents($tmp, $payload, LOCK_EX) !== false) @rename($tmp, $cacheFile);
+                        @unlink($tmp);
+                    }
+                }
+            }
+        }
+        return $result;
+    }
+}
+]]></INLINE><SHA256>29ac5dcf762bea71a4b5019cf01da5cefe3bb8816f75f5183b5e994789739c5c</SHA256></FILE>
+<FILE Name="/usr/local/emhttp/plugins/&name;/profiles.json"><INLINE><![CDATA[{
+  "schema_version": 1,
+  "profiles": []
+}
+]]></INLINE><SHA256>4dfaa8e5ed9db3f50cfbe62f9ec06603e87c6ce9a22fff5741629a578b4c1111</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Controller.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
+require_once __DIR__ . '/Compatibility.php';
 
 /**
  * Plugin Switch runtime controller.
@@ -24,12 +231,14 @@ final class PluginSwitchController
     private string $adapters;
     private string $run;
     private string $pluginCommand;
+    private PluginSwitchCompatibility $scanner;
 
     public function __construct(
         string $boot = '/boot/config/plugins',
         string $installed = '/var/log/plugins',
         string $run = '/run/plugin-switch',
-        string $pluginCommand = '/usr/local/sbin/plugin'
+        string $pluginCommand = '/usr/local/sbin/plugin',
+        ?PluginSwitchCompatibility $scanner = null
     ) {
         $this->boot = rtrim($boot, '/');
         $this->park = $this->boot . '/plugin.switch/disabled';
@@ -37,6 +246,7 @@ final class PluginSwitchController
         $this->installed = rtrim($installed, '/');
         $this->run = rtrim($run, '/');
         $this->pluginCommand = $pluginCommand;
+        $this->scanner = $scanner ?? new PluginSwitchCompatibility();
     }
 
     private function validId(string $id): bool
@@ -67,12 +277,19 @@ final class PluginSwitchController
      *
      * @return array{0: ?string, 1: string, 2: string}
      */
-    private function adapterInfo(string $id): array
+    private function adapterInfo(string $id, string $manifest = ''): array
     {
+        if (PluginSwitchCompatibility::protectedId($id)) {
+            return [null, 'protected', 'Core and Plugin Switch components cannot be toggled.'];
+        }
         $name = substr($id, 0, -4);
         $file = $this->adapters . '/' . $name . '.sh';
         if (!file_exists($file) && !is_link($file)) {
-            return [null, 'no-adapter', 'No trusted live-control adapter is installed. The plugin remains installed and enabled.'];
+            $verified = $manifest !== '' ? $this->scanner->verifiedAdapter($id, $manifest) : null;
+            if ($verified !== null) {
+                return [$verified['path'], 'verified-profile', 'Validated against a hash-pinned bundled live-control profile.'];
+            }
+            return [null, 'no-adapter', 'No verified live-control profile or trusted local adapter is available.'];
         }
         if (is_link($file) || !is_file($file) || filesize($file) === 0 || filesize($file) > 65536) {
             return [null, 'invalid-adapter', 'Adapter is not a regular file or exceeds the allowed size.'];
@@ -125,7 +342,7 @@ final class PluginSwitchController
         }
     }
 
-    private function details(string $id, string $plg, bool $enabled): array
+    private function details(string $id, string $plg, bool $enabled, bool $rescan = false): array
     {
         $name = substr($id, 0, -4);
         $author = '';
@@ -142,7 +359,8 @@ final class PluginSwitchController
                 $version = (string)($xml['version'] ?? '');
             }
         }
-        [$script, $support, $reason] = $this->adapterInfo($id);
+        $compat = $this->scanner->scan($id, $plg, $rescan);
+        [$script, $support, $reason] = $this->adapterInfo($id, $plg);
         $runtime = 'unknown';
         if ($script !== null) {
             try {
@@ -156,6 +374,21 @@ final class PluginSwitchController
                     : 'Plugin is parked. Re-enable restores its files before checking runtime status.';
             }
         }
+        // A discovered service is only a candidate. Never grant live controls
+        // based on a name or init script existing in the filesystem.
+        $supported = $script !== null && (!$enabled || $runtime !== 'unknown');
+        if ($support === 'protected') $supported = false;
+        if ($supported) {
+            $compat['classification'] = 'live';
+            $compat['reason'] = $support === 'verified-profile'
+                ? 'Bundled profile and runtime status verified.'
+                : 'Explicitly trusted local adapter and runtime status verified.';
+            $compat['control_source'] = $support === 'verified-profile' ? 'bundled-profile' : 'local-adapter';
+        } else {
+            $compat['control_source'] = 'none';
+        }
+        if ($support === 'no-adapter') $reason = $compat['reason'];
+        $compat['reason'] = $reason;
         return [
             'id' => $id,
             'name' => $name,
@@ -164,12 +397,13 @@ final class PluginSwitchController
             'enabled' => $enabled,
             'runtime' => $runtime,
             'support' => $support,
-            'supported' => $script !== null && (!$enabled || $runtime !== 'unknown'),
+            'compatibility' => $compat,
+            'supported' => $supported,
             'reason' => $reason,
         ];
     }
 
-    public function all(): array
+    public function all(bool $rescan = false): array
     {
         $items = [];
         foreach (glob($this->installed . '/*.plg') ?: [] as $link) {
@@ -177,7 +411,7 @@ final class PluginSwitchController
                 continue;
             }
             $id = basename($link);
-            if (!$this->validId($id)) {
+            if (!$this->validId($id) && !PluginSwitchCompatibility::protectedId($id)) {
                 continue;
             }
             $bootFile = $this->boot . '/' . $id;
@@ -185,14 +419,14 @@ final class PluginSwitchController
             if (!is_file($bootFile) || is_link($bootFile) || realpath($link) !== realpath($bootFile)) {
                 continue;
             }
-            $items[$id] = $this->details($id, $bootFile, true);
+            $items[$id] = $this->details($id, $bootFile, true, $rescan);
         }
         foreach (glob($this->park . '/*.plg') ?: [] as $file) {
             $id = basename($file);
             if (!$this->validId($id) || is_link($file) || isset($items[$id])) {
                 continue;
             }
-            $items[$id] = $this->details($id, $file, false);
+            $items[$id] = $this->details($id, $file, false, $rescan);
         }
         ksort($items, SORT_NATURAL | SORT_FLAG_CASE);
         return array_values($items);
@@ -209,7 +443,7 @@ final class PluginSwitchController
             throw new RuntimeException('Could not lock plugin operations.');
         }
         try {
-            [$script, , $adapterReason] = $this->adapterInfo($id);
+            [$script, , $adapterReason] = $this->adapterInfo($id, $enable ? $disabled : $active);
             if ($script === null) {
                 throw new RuntimeException($adapterReason);
             }
@@ -287,7 +521,7 @@ final class PluginSwitchController
         }
     }
 }
-]]></INLINE><SHA256>677494dd3d38d7b1a2d7bb2dbcad19b1e96178f9d97b43fa6d9b0ea629ecc32b</SHA256></FILE>
+]]></INLINE><SHA256>5cc4fe83a3ab017730889d2415392505d64eb84bee73f8faa6cb8b1e7e6990b3</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/api.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
@@ -314,6 +548,11 @@ try {
         !is_string($received) || !hash_equals($expected, $received)) {
         respond(403, ['error' => 'Invalid CSRF token']);
     }
+    $action = $_POST['action'] ?? 'toggle';
+    if ($action === 'rescan') {
+        respond(200, ['plugins' => $manager->all(true)]);
+    }
+    if ($action !== 'toggle') respond(400, ['error' => 'Unknown operation']);
     $id = $_POST['id'] ?? null;
     $target = $_POST['enabled'] ?? null;
     if (!is_string($id) || !in_array($target, ['0','1'], true)) {
@@ -323,7 +562,7 @@ try {
 } catch (Throwable $e) {
     respond(409, ['error' => $e->getMessage()]);
 }
-]]></INLINE><SHA256>b64c522ca3f10cd35cd2d3157f645cf860a9748e36ed97e710c1b38e8e81370e</SHA256></FILE>
+]]></INLINE><SHA256>88fe97bb8ed26956e220a10172f3cc5b068f0c348ced875bc32047bbe294d30f</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/switch.js"><INLINE><![CDATA[(function () {
   'use strict';
   const api = '/plugins/plugin.switch/api.php';
@@ -348,6 +587,9 @@ try {
     return map;
   }
   function getStatus(p) {
+    if (p.support === 'protected' || p.compatibility?.classification === 'protected') return 'Protected';
+    if (p.supported) return p.enabled ? 'Live ready' : 'Restore available';
+    if (p.compatibility?.classification === 'candidate') return 'Review required';
     // Installed/parked state is independent of runtime controllability.
     switch (p.support) {
       case 'no-adapter': return 'No live control';
@@ -357,6 +599,41 @@ try {
     }
     if (!p.enabled) return p.runtime === 'enabled' ? 'Still running' : 'Disabled';
     return p.runtime === 'enabled' ? 'Live ready' : 'Service stopped';
+  }
+  // All scanner results are untrusted data from third-party manifests:
+  // render evidence with text escaping, never as executable HTML.
+  function evidence(p) {
+    const c = p.compatibility || {};
+    const services = Array.isArray(c.services) && c.services.length ? c.services.join(', ') : 'None detected';
+    const signals = Array.isArray(c.signals) && c.signals.length ? c.signals.join(', ') : 'None detected';
+    const source = c.control_source || 'none';
+    return '<div><strong>Classification:</strong> ' + escapeHtml(c.classification || 'unknown') + '</div>' +
+      '<div><strong>Reason:</strong> ' + escapeHtml(c.reason || p.reason || 'Unknown') + '</div>' +
+      '<div><strong>Service candidates:</strong> ' + escapeHtml(services) + '</div>' +
+      '<div><strong>Review signals:</strong> ' + escapeHtml(signals) + '</div>' +
+      '<div><strong>Profile:</strong> ' + escapeHtml(c.profile || c.profile_status || 'none') + '</div>' +
+      '<div><strong>Control:</strong> ' + escapeHtml(source) + '</div>' +
+      '<div><strong>Scanned:</strong> ' + escapeHtml(c.scanned_at || 'unknown') + '</div>';
+  }
+  function controlSummary() {
+    const counts = {live:0,candidate:0,'next-boot':0,protected:0};
+    cache.forEach(p => { const c = p.compatibility?.classification; if (c in counts) counts[c]++; });
+    return 'Live ' + counts.live + ' · Review ' + counts.candidate +
+      ' · Next boot ' + counts['next-boot'] + ' · Protected ' + counts.protected;
+  }
+  function toolbar(t) {
+    if (document.getElementById('ps-toolbar')) return;
+    const div = document.createElement('div');
+    div.id = 'ps-toolbar';
+    div.innerHTML = '<span id="ps-summary" aria-live="polite"></span>' +
+      '<button type="button" id="ps-rescan" title="Refresh read-only compatibility discovery">Scan compatibility</button>' +
+      '<button type="button" id="ps-export" title="Download compatibility evidence locally; no data is uploaded">Export report</button>';
+    t.parentNode.insertBefore(div,t);
+  }
+  function updateToolbar() {
+    const label = document.getElementById('ps-summary');
+    const summary = controlSummary();
+    if (label && label.textContent !== summary) label.textContent = summary;
   }
   function makeCell(p) {
     const label = p.enabled ? 'Disable' : 'Enable';
@@ -371,7 +648,9 @@ try {
       '<span class="ps-track"></span></label>' +
       '<small class="ps-state">' + escapeHtml(getStatus(p)) + '</small>' +
       '<span class="ps-help" role="img" aria-label="' + escapeHtml(reason) +
-      '" title="' + escapeHtml(reason) + '">ⓘ</span></td>';
+      '" title="' + escapeHtml(reason) + '">ⓘ</span>' +
+      '<details class="ps-detail"><summary>Why?</summary><div class="ps-evidence">' +
+      evidence(p) + '</div></details></td>';
   }
   function addHeader(t) {
     const header = t.querySelector('thead tr');
@@ -400,14 +679,23 @@ try {
       '.ps-help{font-size:12px;cursor:help;margin-left:4px;opacity:.7}' +
       '.ps-note{color:inherit;opacity:.8;font-size:12px}' +
       '.ps-disabled-row td{opacity:.8}' +
-      '.ps-disabled-row td.ps-cell{opacity:1}';
+      '.ps-disabled-row td.ps-cell{opacity:1}' +
+      '#ps-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0}' +
+      '#ps-summary{margin-right:auto;font-size:12px;opacity:.85}' +
+      '#ps-toolbar button{font-size:12px;cursor:pointer;padding:5px 8px}' +
+      '.ps-detail{max-width:270px;text-align:left;margin:4px auto;font-size:11px}' +
+      '.ps-detail summary{cursor:pointer;white-space:nowrap;text-align:center}' +
+      '.ps-evidence{font-size:11px;line-height:1.45;overflow-wrap:anywhere;padding:5px;min-width:190px}' +
+      '.ps-evidence div{margin:2px 0}';
     document.head.appendChild(style);
   }
   function ensureTable() {
     const t = table();
     if (!t) return;
     addCSS();
+    toolbar(t);
     addHeader(t);
+    updateToolbar();
     const rows = activeRowMap();
     // Remove stale/incomplete cells after Unraid refreshes its table.
     rows.forEach((row,id) => {
@@ -455,6 +743,11 @@ try {
       }
       const status = cell.querySelector('.ps-state');
       if (status && status.textContent !== getStatus(p)) status.textContent = getStatus(p);
+      const details = cell.querySelector('.ps-evidence');
+      if (details) {
+        const updated = evidence(p);
+        if (details.innerHTML !== updated) details.innerHTML = updated;
+      }
     });
     // Fixed-width placeholders and tablesorter may need adjustment after a new column.
     t.querySelectorAll('tbody td[colspan="6"]').forEach(td => td.colSpan = 7);
@@ -514,6 +807,48 @@ try {
   document.addEventListener('change', e => {
     if (e.target.matches('.ps-toggle')) toggle(e.target);
   });
+  document.addEventListener('click', async e => {
+    if (e.target.id === 'ps-rescan') {
+      const button = e.target;
+      if (loading) return;
+      button.disabled = true;
+      loading = true;
+      try {
+        const form = new URLSearchParams({action:'rescan',csrf_token:csrf()});
+        const response = await fetch(api, {
+          method:'POST',credentials:'same-origin',
+          headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Scan failed');
+        cache.clear();
+        (data.plugins || []).forEach(p => cache.set(p.id,p));
+        lastFetch = Date.now();
+        ensureTable();
+      } catch (error) {
+        window.alert('Plugin Switch: ' + error.message);
+      } finally {
+        loading = false;
+        button.disabled = false;
+      }
+    }
+    if (e.target.id === 'ps-export') {
+      const report = {
+        generated_at:new Date().toISOString(),
+        notice:'Local compatibility evidence only. Candidate discovery is NOT a live-control guarantee.',
+        plugins:Array.from(cache.values()).map(p => ({
+          id:p.id,name:p.name,version:p.version,enabled:p.enabled,
+          supported:p.supported,compatibility:p.compatibility
+        }))
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'plugin-switch-compatibility.json';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url),1000);
+    }
+  });
   // MutationObserver handles async ShowPlugins.php list rendering.
   let queued = false;
   const observer = new MutationObserver(() => {
@@ -532,7 +867,7 @@ try {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',init);
   else init();
 })();
-]]></INLINE><SHA256>360baaa5a9f4eb8d68711e6740b9084cb64a796b78ee8264313e7888490eac41</SHA256></FILE>
+]]></INLINE><SHA256>a1725061a423a81744f15cc1f523901b261dd83557229bdae0509f289438de63</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/PluginSwitch_Loader.page"><INLINE><![CDATA[Menu="Buttons:105"
 Link="nav-user"
 ---
@@ -545,10 +880,12 @@ $asset = (string)@filemtime('/usr/local/emhttp/plugins/plugin.switch/switch.js')
 ]]></INLINE><SHA256>f49abfda4d39a47a0bf5d9838bf5e9f66d8965ed3d371e4e8e4d1c123667b172</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/README.md"><INLINE><![CDATA[**Plugin Switch**
 
-Manage plugins from Unraid's existing **Plugins** tab with an Enabled toggle. Supported plugins can be safely stopped and restarted without uninstalling them; settings are preserved. Plugins without a verified live-control adapter remain installed, with their toggle locked and an explanation shown.
+Manage plugins from Unraid's existing **Plugins** tab with an Enabled toggle and automatic read-only compatibility discovery. Supported plugins can be safely stopped and restarted without uninstalling them; settings are preserved. Plugins without a verified live-control adapter remain installed, with their toggle locked and an explanation shown.
 
 **Update channel:** `dev`. Updates follow the same GitHub branch used for installation.
-]]></INLINE><SHA256>6738a3bddd84825ed77985a623b5c501d911d5ef0fccbbc0e5ca8b02efdc5f55</SHA256></FILE>
+
+**Detection:** Safe live controls require verified profiles or trusted local adapters. Potential services are marked for review. The Plugins tab offers manual rescans, per-plugin evidence and a local export.
+]]></INLINE><SHA256>83933d18fe600066a611de63174a4841f69af7f2a6ec653ee856e3ec3dda3e34</SHA256></FILE>
 <FILE Run="/bin/bash"><INLINE><![CDATA[
 set -eu
 mkdir -p /boot/config/plugins/plugin.switch/adapters

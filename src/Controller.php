@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/Compatibility.php';
 
 /**
  * Plugin Switch runtime controller.
@@ -15,12 +16,14 @@ final class PluginSwitchController
     private string $adapters;
     private string $run;
     private string $pluginCommand;
+    private PluginSwitchCompatibility $scanner;
 
     public function __construct(
         string $boot = '/boot/config/plugins',
         string $installed = '/var/log/plugins',
         string $run = '/run/plugin-switch',
-        string $pluginCommand = '/usr/local/sbin/plugin'
+        string $pluginCommand = '/usr/local/sbin/plugin',
+        ?PluginSwitchCompatibility $scanner = null
     ) {
         $this->boot = rtrim($boot, '/');
         $this->park = $this->boot . '/plugin.switch/disabled';
@@ -28,6 +31,7 @@ final class PluginSwitchController
         $this->installed = rtrim($installed, '/');
         $this->run = rtrim($run, '/');
         $this->pluginCommand = $pluginCommand;
+        $this->scanner = $scanner ?? new PluginSwitchCompatibility();
     }
 
     private function validId(string $id): bool
@@ -58,12 +62,19 @@ final class PluginSwitchController
      *
      * @return array{0: ?string, 1: string, 2: string}
      */
-    private function adapterInfo(string $id): array
+    private function adapterInfo(string $id, string $manifest = ''): array
     {
+        if (PluginSwitchCompatibility::protectedId($id)) {
+            return [null, 'protected', 'Core and Plugin Switch components cannot be toggled.'];
+        }
         $name = substr($id, 0, -4);
         $file = $this->adapters . '/' . $name . '.sh';
         if (!file_exists($file) && !is_link($file)) {
-            return [null, 'no-adapter', 'No trusted live-control adapter is installed. The plugin remains installed and enabled.'];
+            $verified = $manifest !== '' ? $this->scanner->verifiedAdapter($id, $manifest) : null;
+            if ($verified !== null) {
+                return [$verified['path'], 'verified-profile', 'Validated against a hash-pinned bundled live-control profile.'];
+            }
+            return [null, 'no-adapter', 'No verified live-control profile or trusted local adapter is available.'];
         }
         if (is_link($file) || !is_file($file) || filesize($file) === 0 || filesize($file) > 65536) {
             return [null, 'invalid-adapter', 'Adapter is not a regular file or exceeds the allowed size.'];
@@ -116,7 +127,7 @@ final class PluginSwitchController
         }
     }
 
-    private function details(string $id, string $plg, bool $enabled): array
+    private function details(string $id, string $plg, bool $enabled, bool $rescan = false): array
     {
         $name = substr($id, 0, -4);
         $author = '';
@@ -133,7 +144,8 @@ final class PluginSwitchController
                 $version = (string)($xml['version'] ?? '');
             }
         }
-        [$script, $support, $reason] = $this->adapterInfo($id);
+        $compat = $this->scanner->scan($id, $plg, $rescan);
+        [$script, $support, $reason] = $this->adapterInfo($id, $plg);
         $runtime = 'unknown';
         if ($script !== null) {
             try {
@@ -147,6 +159,21 @@ final class PluginSwitchController
                     : 'Plugin is parked. Re-enable restores its files before checking runtime status.';
             }
         }
+        // A discovered service is only a candidate. Never grant live controls
+        // based on a name or init script existing in the filesystem.
+        $supported = $script !== null && (!$enabled || $runtime !== 'unknown');
+        if ($support === 'protected') $supported = false;
+        if ($supported) {
+            $compat['classification'] = 'live';
+            $compat['reason'] = $support === 'verified-profile'
+                ? 'Bundled profile and runtime status verified.'
+                : 'Explicitly trusted local adapter and runtime status verified.';
+            $compat['control_source'] = $support === 'verified-profile' ? 'bundled-profile' : 'local-adapter';
+        } else {
+            $compat['control_source'] = 'none';
+        }
+        if ($support === 'no-adapter') $reason = $compat['reason'];
+        $compat['reason'] = $reason;
         return [
             'id' => $id,
             'name' => $name,
@@ -155,12 +182,13 @@ final class PluginSwitchController
             'enabled' => $enabled,
             'runtime' => $runtime,
             'support' => $support,
-            'supported' => $script !== null && (!$enabled || $runtime !== 'unknown'),
+            'compatibility' => $compat,
+            'supported' => $supported,
             'reason' => $reason,
         ];
     }
 
-    public function all(): array
+    public function all(bool $rescan = false): array
     {
         $items = [];
         foreach (glob($this->installed . '/*.plg') ?: [] as $link) {
@@ -168,7 +196,7 @@ final class PluginSwitchController
                 continue;
             }
             $id = basename($link);
-            if (!$this->validId($id)) {
+            if (!$this->validId($id) && !PluginSwitchCompatibility::protectedId($id)) {
                 continue;
             }
             $bootFile = $this->boot . '/' . $id;
@@ -176,14 +204,14 @@ final class PluginSwitchController
             if (!is_file($bootFile) || is_link($bootFile) || realpath($link) !== realpath($bootFile)) {
                 continue;
             }
-            $items[$id] = $this->details($id, $bootFile, true);
+            $items[$id] = $this->details($id, $bootFile, true, $rescan);
         }
         foreach (glob($this->park . '/*.plg') ?: [] as $file) {
             $id = basename($file);
             if (!$this->validId($id) || is_link($file) || isset($items[$id])) {
                 continue;
             }
-            $items[$id] = $this->details($id, $file, false);
+            $items[$id] = $this->details($id, $file, false, $rescan);
         }
         ksort($items, SORT_NATURAL | SORT_FLAG_CASE);
         return array_values($items);
@@ -200,7 +228,7 @@ final class PluginSwitchController
             throw new RuntimeException('Could not lock plugin operations.');
         }
         try {
-            [$script, , $adapterReason] = $this->adapterInfo($id);
+            [$script, , $adapterReason] = $this->adapterInfo($id, $enable ? $disabled : $active);
             if ($script === null) {
                 throw new RuntimeException($adapterReason);
             }

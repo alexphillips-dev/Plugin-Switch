@@ -22,6 +22,8 @@ jobs:
         run: node --check src/switch.js
       - name: Test controller behavior
         run: php tests/controller_test.php
+      - name: Verify capability discovery and audited profile lifecycle
+        run: sudo php tests/compatibility_test.php
       - name: Validate generated manifest
         run: |
           python3 tools/build.py --check

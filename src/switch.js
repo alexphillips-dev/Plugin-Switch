@@ -22,6 +22,9 @@
     return map;
   }
   function getStatus(p) {
+    if (p.support === 'protected' || p.compatibility?.classification === 'protected') return 'Protected';
+    if (p.supported) return p.enabled ? 'Live ready' : 'Restore available';
+    if (p.compatibility?.classification === 'candidate') return 'Review required';
     // Installed/parked state is independent of runtime controllability.
     switch (p.support) {
       case 'no-adapter': return 'No live control';
@@ -31,6 +34,41 @@
     }
     if (!p.enabled) return p.runtime === 'enabled' ? 'Still running' : 'Disabled';
     return p.runtime === 'enabled' ? 'Live ready' : 'Service stopped';
+  }
+  // All scanner results are untrusted data from third-party manifests:
+  // render evidence with text escaping, never as executable HTML.
+  function evidence(p) {
+    const c = p.compatibility || {};
+    const services = Array.isArray(c.services) && c.services.length ? c.services.join(', ') : 'None detected';
+    const signals = Array.isArray(c.signals) && c.signals.length ? c.signals.join(', ') : 'None detected';
+    const source = c.control_source || 'none';
+    return '<div><strong>Classification:</strong> ' + escapeHtml(c.classification || 'unknown') + '</div>' +
+      '<div><strong>Reason:</strong> ' + escapeHtml(c.reason || p.reason || 'Unknown') + '</div>' +
+      '<div><strong>Service candidates:</strong> ' + escapeHtml(services) + '</div>' +
+      '<div><strong>Review signals:</strong> ' + escapeHtml(signals) + '</div>' +
+      '<div><strong>Profile:</strong> ' + escapeHtml(c.profile || c.profile_status || 'none') + '</div>' +
+      '<div><strong>Control:</strong> ' + escapeHtml(source) + '</div>' +
+      '<div><strong>Scanned:</strong> ' + escapeHtml(c.scanned_at || 'unknown') + '</div>';
+  }
+  function controlSummary() {
+    const counts = {live:0,candidate:0,'next-boot':0,protected:0};
+    cache.forEach(p => { const c = p.compatibility?.classification; if (c in counts) counts[c]++; });
+    return 'Live ' + counts.live + ' · Review ' + counts.candidate +
+      ' · Next boot ' + counts['next-boot'] + ' · Protected ' + counts.protected;
+  }
+  function toolbar(t) {
+    if (document.getElementById('ps-toolbar')) return;
+    const div = document.createElement('div');
+    div.id = 'ps-toolbar';
+    div.innerHTML = '<span id="ps-summary" aria-live="polite"></span>' +
+      '<button type="button" id="ps-rescan" title="Refresh read-only compatibility discovery">Scan compatibility</button>' +
+      '<button type="button" id="ps-export" title="Download compatibility evidence locally; no data is uploaded">Export report</button>';
+    t.parentNode.insertBefore(div,t);
+  }
+  function updateToolbar() {
+    const label = document.getElementById('ps-summary');
+    const summary = controlSummary();
+    if (label && label.textContent !== summary) label.textContent = summary;
   }
   function makeCell(p) {
     const label = p.enabled ? 'Disable' : 'Enable';
@@ -45,7 +83,9 @@
       '<span class="ps-track"></span></label>' +
       '<small class="ps-state">' + escapeHtml(getStatus(p)) + '</small>' +
       '<span class="ps-help" role="img" aria-label="' + escapeHtml(reason) +
-      '" title="' + escapeHtml(reason) + '">ⓘ</span></td>';
+      '" title="' + escapeHtml(reason) + '">ⓘ</span>' +
+      '<details class="ps-detail"><summary>Why?</summary><div class="ps-evidence">' +
+      evidence(p) + '</div></details></td>';
   }
   function addHeader(t) {
     const header = t.querySelector('thead tr');
@@ -74,14 +114,23 @@
       '.ps-help{font-size:12px;cursor:help;margin-left:4px;opacity:.7}' +
       '.ps-note{color:inherit;opacity:.8;font-size:12px}' +
       '.ps-disabled-row td{opacity:.8}' +
-      '.ps-disabled-row td.ps-cell{opacity:1}';
+      '.ps-disabled-row td.ps-cell{opacity:1}' +
+      '#ps-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0}' +
+      '#ps-summary{margin-right:auto;font-size:12px;opacity:.85}' +
+      '#ps-toolbar button{font-size:12px;cursor:pointer;padding:5px 8px}' +
+      '.ps-detail{max-width:270px;text-align:left;margin:4px auto;font-size:11px}' +
+      '.ps-detail summary{cursor:pointer;white-space:nowrap;text-align:center}' +
+      '.ps-evidence{font-size:11px;line-height:1.45;overflow-wrap:anywhere;padding:5px;min-width:190px}' +
+      '.ps-evidence div{margin:2px 0}';
     document.head.appendChild(style);
   }
   function ensureTable() {
     const t = table();
     if (!t) return;
     addCSS();
+    toolbar(t);
     addHeader(t);
+    updateToolbar();
     const rows = activeRowMap();
     // Remove stale/incomplete cells after Unraid refreshes its table.
     rows.forEach((row,id) => {
@@ -129,6 +178,11 @@
       }
       const status = cell.querySelector('.ps-state');
       if (status && status.textContent !== getStatus(p)) status.textContent = getStatus(p);
+      const details = cell.querySelector('.ps-evidence');
+      if (details) {
+        const updated = evidence(p);
+        if (details.innerHTML !== updated) details.innerHTML = updated;
+      }
     });
     // Fixed-width placeholders and tablesorter may need adjustment after a new column.
     t.querySelectorAll('tbody td[colspan="6"]').forEach(td => td.colSpan = 7);
@@ -187,6 +241,48 @@
   }
   document.addEventListener('change', e => {
     if (e.target.matches('.ps-toggle')) toggle(e.target);
+  });
+  document.addEventListener('click', async e => {
+    if (e.target.id === 'ps-rescan') {
+      const button = e.target;
+      if (loading) return;
+      button.disabled = true;
+      loading = true;
+      try {
+        const form = new URLSearchParams({action:'rescan',csrf_token:csrf()});
+        const response = await fetch(api, {
+          method:'POST',credentials:'same-origin',
+          headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Scan failed');
+        cache.clear();
+        (data.plugins || []).forEach(p => cache.set(p.id,p));
+        lastFetch = Date.now();
+        ensureTable();
+      } catch (error) {
+        window.alert('Plugin Switch: ' + error.message);
+      } finally {
+        loading = false;
+        button.disabled = false;
+      }
+    }
+    if (e.target.id === 'ps-export') {
+      const report = {
+        generated_at:new Date().toISOString(),
+        notice:'Local compatibility evidence only. Candidate discovery is NOT a live-control guarantee.',
+        plugins:Array.from(cache.values()).map(p => ({
+          id:p.id,name:p.name,version:p.version,enabled:p.enabled,
+          supported:p.supported,compatibility:p.compatibility
+        }))
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'plugin-switch-compatibility.json';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url),1000);
+    }
   });
   // MutationObserver handles async ShowPlugins.php list rendering.
   let queued = false;

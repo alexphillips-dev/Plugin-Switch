@@ -9,9 +9,11 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "2026.10.29.3"
+VERSION = "2026.10.29.4"
 CHANNELS = ("dev", "main")
 SOURCE_FILES = {
+    "src/Compatibility.php": "Compatibility.php",
+    "src/profiles.json": "profiles.json",
     "src/Controller.php": "Controller.php",
     "src/api.php": "api.php",
     "src/switch.js": "switch.js",
@@ -46,7 +48,7 @@ def build(branch: str = "dev") -> str:
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/{branch}/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>{VERSION} - Fix Unraid install/update file refresh with verified SHA-256 payloads.</CHANGES>
+<CHANGES>{VERSION} - Add read-only discovery, hash-pinned compatibility profiles, diagnostics and safe live gating.</CHANGES>
 '''
     parts = [begin]
     for path, name in SOURCE_FILES.items():
@@ -62,6 +64,18 @@ def build(branch: str = "dev") -> str:
         parts.append(
             f'<FILE Name="/usr/local/emhttp/plugins/&name;/{name}">'
             f'<INLINE><![CDATA[{content}]]></INLINE>'
+            f'<SHA256>{digest}</SHA256></FILE>\n'
+        )
+    for adapter in sorted((ROOT / "src/builtin-adapters").glob("*.sh")):
+        # Reviewed adapters may be added in a future version, but are never
+        # loaded from an untrusted remote URL at runtime.
+        content = adapter.read_text(encoding="utf-8")
+        payload = content.strip() + "\n"
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        safe = content.replace("]]>", "]]]]><![CDATA[>")
+        parts.append(
+            f'<FILE Name="/usr/local/emhttp/plugins/&name;/builtin-adapters/{adapter.name}">'
+            f'<INLINE><![CDATA[{safe}]]></INLINE>'
             f'<SHA256>{digest}</SHA256></FILE>\n'
         )
     parts.append('''<FILE Run="/bin/bash"><INLINE><![CDATA[

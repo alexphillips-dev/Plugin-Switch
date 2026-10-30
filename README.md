@@ -1,4 +1,4 @@
-# Plugin Switch (development preview)
+# Plugin Switch (development preview — 2026.10.29.4)
 
 Adds an **Enabled** column to Unraid's existing **Plugins** tab. Designed for true **live** start/stop of plugins that expose a trustworthy runtime control adapter, rather than misleading everyone with a generic ON/OFF switch.
 
@@ -111,3 +111,23 @@ php tests/controller_test.php
 ## Reference
 
 Unraid WebGUI source: [Plugins.page](https://github.com/unraid/webgui/blob/master/emhttp/plugins/dynamix.plugin.manager/Plugins.page) and [ShowPlugins.php](https://github.com/unraid/webgui/blob/master/emhttp/plugins/dynamix.plugin.manager/include/ShowPlugins.php).
+
+## Automatic compatibility discovery (2026.10.29.4)
+
+The Plugins page now shows read-only scan results plus a **Scan compatibility** button and **Export report** button. The scanner runs without stopping plugins, executing their install/uninstall hooks, or inspecting unrelated process command lines.
+
+- **Live:** a trusted local administrator adapter or a reviewed *bundled profile* with exact manifest and adapter SHA-256 hashes has passed a runtime status check. Live toggle unlocked.
+- **Review required:** possible service start/stop references detected, or a previously-reviewed manifest changed. Toggle remains locked.
+- **Next boot:** no confirmed reversible live controls found. Toggle locked; this classification is informational, not an implemented scheduling action.
+- **Protected:** core OS/Plugin Switch cannot be toggled.
+- **Scanned:** read-only analysis uses manifest evidence and 5-minute RAM-disk cache, refreshed when content or the profile registry changes. Manually rescan any time.
+
+Evidence includes candidate service scripts, potential scheduler/kernel/network/storage/global hook interactions, the exact manifest fingerprint, and matching profile status. Scanner findings are hints, not proof a plugin can be live-disabled.
+
+### Phases delivered
+
+1. **Discovery:** read-only bounded manifest XML inspection, service references, hazard signals, persisted /run cache, manual rescan, expandable per-plugin report.
+2. **Verified control engine:** local adapters remain supported; bundled reviewed profiles can automatically provide live control only if both a specific plugin manifest and adapter file match pinned SHA-256 hashes. A lifecycle integration test uses a disposable synthetic plugin. **No unaudited third-party plugin has been enabled by default.**
+3. **Expandability:** `src/profiles.json` is the audited catalog; `src/builtin-adapters/*.sh` packages reviewed adapters; `profiles/README.md` documents review and submission procedures. The UI exports on-device evidence to support future plugin reviews. No telemetry or automatic remote fetching.
+
+**Important:** The installed plugin ecosystem is not standardized. Discovering a `start/stop` script does NOT mean all scheduled tasks, WebGUI hooks, packages or kernel modifications are reversible. We do not ship fabricated compatibility profiles. Profiles for popular plugins require source review and a real Unraid test cycle before being approved.

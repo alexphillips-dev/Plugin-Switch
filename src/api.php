@@ -24,6 +24,11 @@ try {
         !is_string($received) || !hash_equals($expected, $received)) {
         respond(403, ['error' => 'Invalid CSRF token']);
     }
+    $action = $_POST['action'] ?? 'toggle';
+    if ($action === 'rescan') {
+        respond(200, ['plugins' => $manager->all(true)]);
+    }
+    if ($action !== 'toggle') respond(400, ['error' => 'Unknown operation']);
     $id = $_POST['id'] ?? null;
     $target = $_POST['enabled'] ?? null;
     if (!is_string($id) || !in_array($target, ['0','1'], true)) {

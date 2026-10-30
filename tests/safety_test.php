@@ -69,7 +69,7 @@ assertSafety(PluginSwitchRelease::isNewer(null, '2026.10.29.10') === false,
     'missing remote version is never newer');
 
 $adapter = "$root/status.sh";
-file_put_contents($adapter, "#!/bin/bash\\necho enabled\\n");
+file_put_contents($adapter, "#!/bin/bash\necho enabled\n");
 chmod($adapter,0700);
 $probe = PluginSwitchProbePool::check(['test.plg'=>$adapter], 2);
 assertSafety(($probe['test.plg']['state'] ?? '') === 'enabled', 'parallel status probe');

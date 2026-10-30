@@ -22,6 +22,16 @@ final class PluginSwitchRelease
         return null;
     }
 
+    /**
+     * Match the native Unraid third-party plugin manager exactly.
+     * PHP version_compare() is NOT used there; strcmp() is.
+     */
+    public static function isNewer(?string $published, ?string $installed): bool
+    {
+        return $published !== null && $installed !== null &&
+            strcmp($published, $installed) > 0;
+    }
+
     public function local(): array
     {
         if (!is_file($this->manifest) || is_link($this->manifest)) {
@@ -84,8 +94,8 @@ final class PluginSwitchRelease
             $result['error'] = 'Release manifest has no recognized version.';
             return $result;
         }
-        $result['available'] = $result['installed_version'] !== null &&
-            version_compare($result['latest_version'], $result['installed_version'], '>');
+        // Keep diagnostics consistent with Unraid's native third-party strcmp() check.
+        $result['available'] = self::isNewer($result['latest_version'], $result['installed_version']);
         $result['error'] = null;
         $dir = dirname($this->cache);
         if (is_dir($dir) || @mkdir($dir, 0700, true)) {

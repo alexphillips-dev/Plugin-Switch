@@ -2,7 +2,7 @@
 
 [Home](Home) · [How It Works](How-It-Works) · [Security Model](Security-Model)
 
-This is an implementation-oriented guide for the current **`dev` build `2026.10.29.10`**. It documents the code as shipped; it is not a stable external API commitment.
+This is an implementation-oriented guide for the current **`dev` build `2026.10.29.90`**. It documents the code as shipped; it is not a stable external API commitment.
 
 ## Components
 

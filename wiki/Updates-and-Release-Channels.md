@@ -8,7 +8,22 @@ Plugin Switch follows the requested Unraid-style version scheme:
 YYYY.MM.DD.patch
 ```
 
-For example, `2026.10.29.10` is the tenth numbered patch on October 29, 2026. On a new release date, the patch portion starts at `.1`. The source build utility validates this pattern and generates a self-contained `.plg` manifest with per-file SHA-256 checksums.
+For example, `2026.10.29.90` is a compatibility-bridge patch on October 29, 2026. The source build utility validates this pattern, verifies Unraid-compatible ordering against historical releases, and generates a self-contained `.plg` with per-file SHA-256 checksums. On future dates, use **zero-padded numeric fields**, for example `2026.10.30.01`, `2026.10.30.02`, and so forth.
+
+## Important: how Unraid compares plugin versions
+
+Unraid's current third-party plugin update code uses PHP `strcmp($latest, $installed)`, which compares **characters**, not numeric patch components. This is why `2026.10.29.10` did not show as newer than `2026.10.29.9` for some installations.
+
+| Installed | Available | Unraid's comparison |
+|---|---|---|
+| `2026.10.29.9` | `2026.10.29.10` | **Not newer** (legacy ordering problem) |
+| `2026.10.29.9` | `2026.10.29.90` | **Newer** |
+| `2026.10.29.10` | `2026.10.29.90` | **Newer** |
+| `2026.10.29.90` | `2026.10.30.01` | **Newer** |
+
+The bridge patch `.90` intentionally follows `.9` lexicographically while remaining in `YYYY.MM.DD.patch` format. This resolves update discovery for both `.9` and `.10` installations. Future versions on a new date will start with `.01` and use consistent zero padding for reliable string sorting. Avoid mixing padded and unpadded patch formats on the same date.
+
+The builder rejects a proposed release if it is not lexicographically newer than every earlier release documented in [CHANGELOG.md](https://github.com/alexphillips-dev/Plugin-Switch/blob/dev/CHANGELOG.md).
 
 ## `dev` vs `main`
 
@@ -46,7 +61,7 @@ curl -fL --connect-timeout 10 --max-time 30 \
 head -n 12 /tmp/plugin.switch.plg
 ```
 
-If the versions differ and Unraid isn't offering an update, try Unraid's **Check For Updates** and inspect any failure logs. Do not manually replace live PHP/JavaScript runtime files while an install/update operation is active.
+If the versions differ and Unraid isn't offering an update, check the **lexicographic comparison** above, then use Unraid's **Check For Updates** and inspect any failure logs. If your local manifest has an outdated or non-`dev` `pluginURL`, the native updater will keep checking the wrong branch. You may reinstall from the exact `dev` URL through Unraid's normal plugin installer after backing up your boot flash. Do not manually replace live PHP/JavaScript runtime files while an install/update operation is active.
 
 ## Building a release (maintainers)
 
@@ -60,4 +75,4 @@ python3 -m unittest discover -s tests -v
 
 A future stable release is built on `main` with `--branch main`. The `.plg` includes an exact `pluginURL` and SHA-256 digests for its bundled payload, allowing Unraid to replace outdated inline files during updates.
 
-See [Contributing](Contributing) for the release checklist and [Release History](Release-History) for development milestones.
+See [Contributing](Contributing) for the release checklist and the [canonical CHANGELOG.md](https://github.com/alexphillips-dev/Plugin-Switch/blob/dev/CHANGELOG.md) for release changes.

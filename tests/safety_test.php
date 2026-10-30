@@ -55,6 +55,16 @@ assertSafety(is_file("$boot/another.plg"), 'boot manifest present');
 assertSafety(PluginSwitchRelease::versionOf(
     '<!ENTITY version "2026.10.29.9">') === '2026.10.29.9', 'version extraction');
 assertSafety(PluginSwitchRelease::versionOf('<PLUGIN/>')===null, 'invalid version is null');
+assertSafety(PluginSwitchRelease::isNewer('2026.10.29.10', '2026.10.29.9') === false,
+    'native Unraid ordering rejects legacy .10 after .9');
+assertSafety(PluginSwitchRelease::isNewer('2026.10.29.90', '2026.10.29.9') === true,
+    'bridge release newer than .9');
+assertSafety(PluginSwitchRelease::isNewer('2026.10.29.90', '2026.10.29.10') === true,
+    'bridge release newer than .10');
+assertSafety(PluginSwitchRelease::isNewer('2026.10.30.01', '2026.10.29.90') === true,
+    'future-date zero padded version is newer');
+assertSafety(PluginSwitchRelease::isNewer(null, '2026.10.29.10') === false,
+    'missing remote version is never newer');
 
 $adapter = "$root/status.sh";
 file_put_contents($adapter, "#!/bin/bash\necho enabled\n");

@@ -2,11 +2,11 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
 <!ENTITY author "alexphillips-dev">
-<!ENTITY version "2026.10.29.10">
+<!ENTITY version "2026.10.29.90">
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>2026.10.29.10 - Hardening: persistent recovery, dependency protection, parallel probes, update diagnostics and safe rollback.</CHANGES>
+<CHANGES>2026.10.29.90 - Fix Unraid lexicographic update ordering; move full release notes into CHANGELOG.md.</CHANGES>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Compatibility.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 
@@ -496,6 +496,16 @@ final class PluginSwitchRelease
         return null;
     }
 
+    /**
+     * Match the native Unraid third-party plugin manager exactly.
+     * PHP version_compare() is NOT used there; strcmp() is.
+     */
+    public static function isNewer(?string $published, ?string $installed): bool
+    {
+        return $published !== null && $installed !== null &&
+            strcmp($published, $installed) > 0;
+    }
+
     public function local(): array
     {
         if (!is_file($this->manifest) || is_link($this->manifest)) {
@@ -558,8 +568,8 @@ final class PluginSwitchRelease
             $result['error'] = 'Release manifest has no recognized version.';
             return $result;
         }
-        $result['available'] = $result['installed_version'] !== null &&
-            version_compare($result['latest_version'], $result['installed_version'], '>');
+        // Keep diagnostics consistent with Unraid's native third-party strcmp() check.
+        $result['available'] = self::isNewer($result['latest_version'], $result['installed_version']);
         $result['error'] = null;
         $dir = dirname($this->cache);
         if (is_dir($dir) || @mkdir($dir, 0700, true)) {
@@ -576,7 +586,7 @@ final class PluginSwitchRelease
         return $result;
     }
 }
-]]></INLINE><SHA256>164ca82d932ec69371ee5a7e5051d0ffa23505ac170de150426fa605df93b0c0</SHA256></FILE>
+]]></INLINE><SHA256>1a86a3686fb0c226552c57bb5ab6c48c9bca203ec6e74585f887af7f33c6465e</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Controller.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 require_once __DIR__ . '/Compatibility.php';

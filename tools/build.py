@@ -9,7 +9,7 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "2026.10.29.10"
+VERSION = "2026.10.29.90"
 CHANNELS = ("dev", "main")
 SOURCE_FILES = {
     "src/Compatibility.php": "Compatibility.php",
@@ -34,6 +34,24 @@ def validate_version(version: str) -> None:
         raise ValueError("Patch numbers begin at 1")
 
 
+def validate_unraid_release_order(version: str) -> None:
+    """Unraid checks third-party .plg versions with strcmp, not version_compare.
+
+    A release must sort ABOVE *all* older published versions as plain strings,
+    including legacy non-padded patches such as .9 versus .10.
+    """
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    previous = re.findall(r"^## \[([0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]+)\]", changelog, re.M)
+    if not previous or previous[0] != version:
+        raise ValueError("CHANGELOG.md must start with the current release")
+    for older in previous[1:]:
+        if version <= older:
+            raise ValueError(
+                f"Unraid string ordering: {version} is NOT newer than {older}. "
+                "Choose a lexicographically newer YYYY.MM.DD.patch."
+            )
+
+
 def validate_branch(branch: str) -> None:
     if branch not in CHANNELS:
         raise ValueError(f"Unsupported release branch: {branch!r}. Choose dev or main.")
@@ -42,6 +60,7 @@ def validate_branch(branch: str) -> None:
 def build(branch: str = "dev") -> str:
     """Build a manifest whose update URL and description pin its branch."""
     validate_version(VERSION)
+    validate_unraid_release_order(VERSION)
     validate_branch(branch)
     begin = f'''<?xml version="1.0" standalone="yes"?>
 <!DOCTYPE PLUGIN [
@@ -51,7 +70,7 @@ def build(branch: str = "dev") -> str:
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/{branch}/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>{VERSION} - Hardening: persistent recovery, dependency protection, parallel probes, update diagnostics and safe rollback.</CHANGES>
+<CHANGES>{VERSION} - Fix Unraid lexicographic update ordering; move full release notes into CHANGELOG.md.</CHANGES>
 '''
     parts = [begin]
     for path, name in SOURCE_FILES.items():

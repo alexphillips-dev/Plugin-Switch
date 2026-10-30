@@ -34,7 +34,7 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(declared, expected)
 
     def test_unraid_version_policy(self):
-        self.assertEqual(build.VERSION, "2026.10.29.10")
+        self.assertEqual(build.VERSION, "2026.10.29.90")
         build.validate_version(build.VERSION)
         self.assertIn(f'<!ENTITY version "{build.VERSION}">', build.build())
         for invalid in ("2026.10.29-dev1", "2026.13.29.1", "2026.02.30.1",
@@ -42,6 +42,26 @@ class BuildTests(unittest.TestCase):
             with self.subTest(version=invalid):
                 with self.assertRaises(ValueError):
                     build.validate_version(invalid)
+
+    def test_unraid_lexicographic_update_order(self):
+        # Unraid uses PHP strcmp for third-party plugins, not numeric semver.
+        self.assertLess("2026.10.29.10", "2026.10.29.9")
+        self.assertGreater(build.VERSION, "2026.10.29.9")
+        self.assertGreater(build.VERSION, "2026.10.29.10")
+        self.assertGreater("2026.10.30.01", build.VERSION)
+        build.validate_unraid_release_order(build.VERSION)
+        with self.assertRaises(ValueError):
+            build.validate_unraid_release_order("2026.10.29.11")
+
+    def test_readme_is_evergreen_and_changelog_preserves_history(self):
+        readme = (ROOT / "README.md").read_text()
+        changelog = (ROOT / "CHANGELOG.md").read_text()
+        self.assertLess(len(readme.split()), 550, "README should not become a release log")
+        self.assertIn("[Changelog](CHANGELOG.md)", readme)
+        self.assertIn("GitHub Wiki", readme)
+        for patch in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 90):
+            self.assertIn(f"## [2026.10.29.{patch}]", changelog)
+        self.assertNotIn("## 2026.10.29.", readme)
 
     def test_branch_pins_updates_and_readme_description(self):
         for branch in ("dev", "main"):

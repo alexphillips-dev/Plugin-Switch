@@ -9,7 +9,7 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "2026.10.29.4"
+VERSION = "2026.10.29.5"
 CHANNELS = ("dev", "main")
 SOURCE_FILES = {
     "src/Compatibility.php": "Compatibility.php",
@@ -48,7 +48,7 @@ def build(branch: str = "dev") -> str:
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/{branch}/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>{VERSION} - Add read-only discovery, hash-pinned compatibility profiles, diagnostics and safe live gating.</CHANGES>
+<CHANGES>{VERSION} - Fix CSRF scan requests and declutter the Plugins Enabled column.</CHANGES>
 '''
     parts = [begin]
     for path, name in SOURCE_FILES.items():

@@ -2,11 +2,11 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
 <!ENTITY author "alexphillips-dev">
-<!ENTITY version "2026.10.29.4">
+<!ENTITY version "2026.10.29.5">
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>2026.10.29.4 - Add read-only discovery, hash-pinned compatibility profiles, diagnostics and safe live gating.</CHANGES>
+<CHANGES>2026.10.29.5 - Fix CSRF scan requests and declutter the Plugins Enabled column.</CHANGES>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Compatibility.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 
@@ -536,22 +536,17 @@ function respond(int $status, array $payload): never {
 try {
     $manager = new PluginSwitchController();
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-        respond(200, ['plugins' => $manager->all()]);
+        // Compatibility scanning only reads plugin definitions and refreshes
+        // our private /run cache. Use GET for this non-mutating operation.
+        $force = ($_GET['rescan'] ?? '') === '1';
+        respond(200, ['plugins' => $manager->all($force)]);
     }
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') respond(405, ['error' => 'Method not allowed']);
-    // Unraid validates POST csrf_token in its local_prepend.php. Independently
-    // validate it here, too, so alternative hosting cannot bypass the guard.
-    $session = @parse_ini_file('/var/local/emhttp/var.ini', false, INI_SCANNER_RAW);
-    $expected = $session['csrf_token'] ?? null;
-    $received = $_POST['csrf_token'] ?? null;
-    if (!is_string($expected) || $expected === '' ||
-        !is_string($received) || !hash_equals($expected, $received)) {
-        respond(403, ['error' => 'Invalid CSRF token']);
-    }
+    // Unraid's webGUI auto_prepend (local_prepend.php) verifies CSRF tokens
+    // BEFORE this script runs, then removes csrf_token from $_POST.
+    // Validating it a second time here always fails for legitimate requests.
+    // Never expose this endpoint outside Unraid's authenticated WebGUI.
     $action = $_POST['action'] ?? 'toggle';
-    if ($action === 'rescan') {
-        respond(200, ['plugins' => $manager->all(true)]);
-    }
     if ($action !== 'toggle') respond(400, ['error' => 'Unknown operation']);
     $id = $_POST['id'] ?? null;
     $target = $_POST['enabled'] ?? null;
@@ -562,95 +557,83 @@ try {
 } catch (Throwable $e) {
     respond(409, ['error' => $e->getMessage()]);
 }
-]]></INLINE><SHA256>88fe97bb8ed26956e220a10172f3cc5b068f0c348ced875bc32047bbe294d30f</SHA256></FILE>
+]]></INLINE><SHA256>27c4ac862ee079bfb548dceaa84973c91ba54715ed05658a9ed76e3a405bea54</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/switch.js"><INLINE><![CDATA[(function () {
   'use strict';
+
   const api = '/plugins/plugin.switch/api.php';
   const cache = new Map();
   let loading = false;
   let lastFetch = 0;
-  const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({
-    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-  })[c]);
-  function isPlugins() {
-    return !!document.querySelector('#plugin_table thead');
-  }
-  function table() {
-    return document.getElementById('plugin_table');
-  }
-  function activeRowMap() {
-    const map = new Map();
-    document.querySelectorAll('#plugin_table tbody tr').forEach(row => {
-      const entry = row.querySelector('input.remove[data]');
-      if (entry) map.set(entry.getAttribute('data'), row);
-    });
-    return map;
+  let queued = false;
+  let openDetailId = null;
+
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  })[ch]);
+
+  function table() { return document.getElementById('plugin_table'); }
+  function isPlugins() { return !!table()?.querySelector('thead'); }
+  function csrf() {
+    // Unraid exposes this in HeadInlineJS.php. Its local_prepend.php consumes
+    // the POST token before our PHP handler is called.
+    if (typeof window.csrf_token === 'string' && window.csrf_token) return window.csrf_token;
+    return document.querySelector('input[name="csrf_token"]')?.value || '';
   }
   function getStatus(p) {
     if (p.support === 'protected' || p.compatibility?.classification === 'protected') return 'Protected';
     if (p.supported) return p.enabled ? 'Live ready' : 'Restore available';
     if (p.compatibility?.classification === 'candidate') return 'Review required';
-    // Installed/parked state is independent of runtime controllability.
     switch (p.support) {
       case 'no-adapter': return 'No live control';
       case 'invalid-adapter': return 'Adapter blocked';
       case 'status-error': return 'Adapter error';
       case 'restore-only': return 'Restore available';
     }
-    if (!p.enabled) return p.runtime === 'enabled' ? 'Still running' : 'Disabled';
-    return p.runtime === 'enabled' ? 'Live ready' : 'Service stopped';
+    return p.enabled ? 'No live control' : 'Disabled';
   }
-  // All scanner results are untrusted data from third-party manifests:
-  // render evidence with text escaping, never as executable HTML.
+  function explanation(p) {
+    const state = p.enabled ? 'Installed (ON)' : 'Parked (OFF)';
+    return state + ' · ' + getStatus(p) + '. ' +
+      (p.compatibility?.reason || p.reason || 'No compatibility details available.');
+  }
   function evidence(p) {
     const c = p.compatibility || {};
     const services = Array.isArray(c.services) && c.services.length ? c.services.join(', ') : 'None detected';
     const signals = Array.isArray(c.signals) && c.signals.length ? c.signals.join(', ') : 'None detected';
-    const source = c.control_source || 'none';
-    return '<div><strong>Classification:</strong> ' + escapeHtml(c.classification || 'unknown') + '</div>' +
-      '<div><strong>Reason:</strong> ' + escapeHtml(c.reason || p.reason || 'Unknown') + '</div>' +
-      '<div><strong>Service candidates:</strong> ' + escapeHtml(services) + '</div>' +
-      '<div><strong>Review signals:</strong> ' + escapeHtml(signals) + '</div>' +
-      '<div><strong>Profile:</strong> ' + escapeHtml(c.profile || c.profile_status || 'none') + '</div>' +
-      '<div><strong>Control:</strong> ' + escapeHtml(source) + '</div>' +
-      '<div><strong>Scanned:</strong> ' + escapeHtml(c.scanned_at || 'unknown') + '</div>';
-  }
-  function controlSummary() {
-    const counts = {live:0,candidate:0,'next-boot':0,protected:0};
-    cache.forEach(p => { const c = p.compatibility?.classification; if (c in counts) counts[c]++; });
-    return 'Live ' + counts.live + ' · Review ' + counts.candidate +
-      ' · Next boot ' + counts['next-boot'] + ' · Protected ' + counts.protected;
-  }
-  function toolbar(t) {
-    if (document.getElementById('ps-toolbar')) return;
-    const div = document.createElement('div');
-    div.id = 'ps-toolbar';
-    div.innerHTML = '<span id="ps-summary" aria-live="polite"></span>' +
-      '<button type="button" id="ps-rescan" title="Refresh read-only compatibility discovery">Scan compatibility</button>' +
-      '<button type="button" id="ps-export" title="Download compatibility evidence locally; no data is uploaded">Export report</button>';
-    t.parentNode.insertBefore(div,t);
-  }
-  function updateToolbar() {
-    const label = document.getElementById('ps-summary');
-    const summary = controlSummary();
-    if (label && label.textContent !== summary) label.textContent = summary;
+    const entries = [
+      ['State', p.enabled ? 'Installed (ON)' : 'Parked (OFF)'],
+      ['Compatibility', getStatus(p)],
+      ['Classification', c.classification || 'unknown'],
+      ['Reason', c.reason || p.reason || 'Unknown'],
+      ['Service candidates', services],
+      ['Review signals', signals],
+      ['Profile', c.profile || c.profile_status || 'none'],
+      ['Control source', c.control_source || 'none'],
+      ['Scanned', c.scanned_at || 'unknown']
+    ];
+    return entries.map(([label,value]) =>
+      '<div class="ps-evidence-row"><dt>' + escapeHtml(label) + '</dt><dd>' +
+      escapeHtml(value) + '</dd></div>'
+    ).join('');
   }
   function makeCell(p) {
     const label = p.enabled ? 'Disable' : 'Enable';
-    const disabled = !p.supported;
-    const reason = (p.enabled ? 'Installed at boot' : 'Parked / not loaded at boot') +
-      '. ' + (p.reason || (label + ' ' + p.name));
     const checked = p.enabled ? ' checked' : '';
+    const disabled = p.supported ? '' : ' disabled';
+    const icon = p.supported ? 'fa-info-circle' : 'fa-lock';
+    const reason = explanation(p);
     return '<td class="ps-cell" data-plugin-switch="' + escapeHtml(p.id) + '">' +
+      '<div class="ps-actions">' +
       '<label class="ps-control" title="' + escapeHtml(reason) + '">' +
-      '<input type="checkbox" class="ps-toggle" aria-label="' + escapeHtml(label + ' ' + p.name) +
-      '" data-id="' + escapeHtml(p.id) + '"' + checked + (disabled ? ' disabled' : '') + '>' +
-      '<span class="ps-track"></span></label>' +
-      '<small class="ps-state">' + escapeHtml(getStatus(p)) + '</small>' +
-      '<span class="ps-help" role="img" aria-label="' + escapeHtml(reason) +
-      '" title="' + escapeHtml(reason) + '">ⓘ</span>' +
-      '<details class="ps-detail"><summary>Why?</summary><div class="ps-evidence">' +
-      evidence(p) + '</div></details></td>';
+      '<input type="checkbox" class="ps-toggle" aria-label="' +
+      escapeHtml(label + ' ' + p.name) + '" data-id="' + escapeHtml(p.id) + '"' +
+      checked + disabled + '><span class="ps-track"></span></label>' +
+      '<button type="button" class="ps-info" data-id="' + escapeHtml(p.id) +
+      '" title="' + escapeHtml(reason) + '" aria-label="Compatibility details for ' +
+      escapeHtml(p.name) + '" aria-expanded="false">' +
+      '<i class="fa ' + icon + '" aria-hidden="true"></i></button>' +
+      '</div></td>';
   }
   function addHeader(t) {
     const header = t.querySelector('thead tr');
@@ -658,36 +641,99 @@ try {
     const th = document.createElement('th');
     th.className = 'ps-head';
     th.textContent = 'Enabled';
-    th.title = 'ON means installed; OFF means parked. Live control requires a verified adapter. Hover the info symbol for details.';
-    // Append as final column so native tablesorter column mappings remain stable.
+    th.title = 'A switch shows installed state. The icon explains live-control compatibility.';
     header.appendChild(th);
   }
   function addCSS() {
     if (document.getElementById('ps-css')) return;
     const style = document.createElement('style');
     style.id = 'ps-css';
-    style.textContent = '.ps-head,.ps-cell{text-align:center!important;min-width:90px}' +
-      '.ps-control{position:relative;display:inline-flex;vertical-align:middle;cursor:pointer}' +
-      '.ps-toggle{position:absolute;opacity:0;width:42px;height:24px;cursor:pointer}' +
-      '.ps-track{width:42px;height:24px;border-radius:16px;background:#777;position:relative;pointer-events:none;transition:background .15s}' +
-      '.ps-track:after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:100%;background:#fff;transition:transform .15s}' +
-      '.ps-toggle:checked+.ps-track{background:#278d63}' +
-      '.ps-toggle:checked+.ps-track:after{transform:translateX(18px)}' +
-      '.ps-toggle:focus-visible+.ps-track{outline:2px solid #378aff;outline-offset:2px}' +
-      '.ps-toggle:disabled+.ps-track{opacity:.68;cursor:not-allowed}' +
-      '.ps-state{display:block;white-space:nowrap;margin-top:3px;font-size:10px}' +
-      '.ps-help{font-size:12px;cursor:help;margin-left:4px;opacity:.7}' +
-      '.ps-note{color:inherit;opacity:.8;font-size:12px}' +
-      '.ps-disabled-row td{opacity:.8}' +
-      '.ps-disabled-row td.ps-cell{opacity:1}' +
+    style.textContent =
+      '.ps-head,.ps-cell{text-align:center!important;min-width:92px;width:104px;vertical-align:middle!important}' +
+      '.ps-actions{display:flex;align-items:center;justify-content:center;gap:8px;min-height:26px}' +
+      '.ps-control{position:relative;display:inline-flex;width:38px;height:22px;flex:0 0 auto;cursor:pointer}' +
+      '.ps-toggle{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1}' +
+      '.ps-track{display:block;width:38px;height:22px;border-radius:99px;background:#777;pointer-events:none;transition:background .15s}' +
+      '.ps-track:after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}' +
+      '.ps-toggle:checked+.ps-track{background:#23845f}' +
+      '.ps-toggle:checked+.ps-track:after{transform:translateX(16px)}' +
+      '.ps-toggle:focus-visible+.ps-track{outline:2px solid #459bff;outline-offset:2px}' +
+      '.ps-toggle:disabled{cursor:not-allowed}' +
+      '.ps-toggle:disabled+.ps-track{opacity:.55}' +
+      '.ps-control:has(.ps-toggle:disabled){cursor:not-allowed}' +
+      '.ps-info{width:25px;height:25px;min-width:25px;padding:0;border:0;border-radius:6px;background:transparent!important;color:inherit;opacity:.7;cursor:pointer;line-height:25px}' +
+      '.ps-info:hover,.ps-info:focus-visible,.ps-info[aria-expanded=true]{opacity:1;background:rgba(128,128,128,.14)!important}' +
+      '.ps-info:focus-visible{outline:2px solid #459bff;outline-offset:1px}' +
+      '.ps-note{font-size:12px;opacity:.75}.ps-disabled-row td{opacity:.8}.ps-disabled-row td.ps-cell{opacity:1}' +
       '#ps-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0}' +
-      '#ps-summary{margin-right:auto;font-size:12px;opacity:.85}' +
+      '#ps-summary{font-size:12px;opacity:.85;margin-right:auto}' +
       '#ps-toolbar button{font-size:12px;cursor:pointer;padding:5px 8px}' +
-      '.ps-detail{max-width:270px;text-align:left;margin:4px auto;font-size:11px}' +
-      '.ps-detail summary{cursor:pointer;white-space:nowrap;text-align:center}' +
-      '.ps-evidence{font-size:11px;line-height:1.45;overflow-wrap:anywhere;padding:5px;min-width:190px}' +
-      '.ps-evidence div{margin:2px 0}';
+      '#ps-details{position:fixed;z-index:10020;max-width:min(390px,calc(100vw - 24px));width:340px;max-height:min(430px,calc(100vh - 24px));overflow:auto;' +
+      'box-sizing:border-box;padding:15px 16px;border:1px solid #656b74;border-radius:10px;background:var(--background-color,#20232b);color:var(--text-color,#ededed);' +
+      'box-shadow:0 14px 35px rgba(0,0,0,.35);font-size:12px;line-height:1.4}' +
+      '.ps-details-head{display:flex;align-items:center;gap:12px;justify-content:space-between;margin-bottom:10px}' +
+      '#ps-details-close{font-size:18px;line-height:20px;cursor:pointer;border:0;background:transparent;color:inherit}' +
+      '.ps-evidence-row{display:grid;grid-template-columns:105px minmax(0,1fr);gap:8px;border-top:1px solid rgba(128,128,128,.2);padding:7px 0}' +
+      '.ps-evidence-row dt{opacity:.72}.ps-evidence-row dd{margin:0;overflow-wrap:anywhere}';
     document.head.appendChild(style);
+  }
+  function summary() {
+    const count = {live:0,candidate:0,'next-boot':0,protected:0};
+    cache.forEach(p => {
+      const cls = p.compatibility?.classification;
+      if (Object.prototype.hasOwnProperty.call(count,cls)) count[cls]++;
+    });
+    return 'Live ' + count.live + ' · Review ' + count.candidate +
+      ' · Next boot ' + count['next-boot'] + ' · Protected ' + count.protected;
+  }
+  function toolbar(t) {
+    if (document.getElementById('ps-toolbar')) return;
+    const div = document.createElement('div');
+    div.id = 'ps-toolbar';
+    div.innerHTML = '<span id="ps-summary" aria-live="polite"></span>' +
+      '<button type="button" id="ps-rescan" title="Refresh compatibility discovery">Scan compatibility</button>' +
+      '<button type="button" id="ps-export" title="Download a local JSON report">Export report</button>';
+    t.parentNode.insertBefore(div,t);
+  }
+  function activeRowMap() {
+    const map = new Map();
+    document.querySelectorAll('#plugin_table tbody tr').forEach(row => {
+      const entry = row.querySelector('input.remove[data]');
+      if (entry) map.set(entry.getAttribute('data'),row);
+    });
+    return map;
+  }
+  function closeDetails() {
+    document.getElementById('ps-details')?.remove();
+    document.querySelectorAll('.ps-info[aria-expanded="true"]').forEach(btn =>
+      btn.setAttribute('aria-expanded','false'));
+    openDetailId = null;
+  }
+  function showDetails(button) {
+    const id = button.dataset.id;
+    if (openDetailId === id) { closeDetails(); return; }
+    const p = cache.get(id);
+    if (!p) return;
+    closeDetails();
+    const panel = document.createElement('section');
+    panel.id = 'ps-details';
+    panel.setAttribute('role','dialog');
+    panel.setAttribute('aria-label','Plugin compatibility details');
+    panel.innerHTML = '<div class="ps-details-head"><strong>' + escapeHtml(p.name) +
+      '</strong><button id="ps-details-close" type="button" aria-label="Close details">×</button></div>' +
+      '<dl class="ps-evidence">' + evidence(p) + '</dl>';
+    document.body.appendChild(panel);
+    const rect = button.getBoundingClientRect();
+    const width = panel.getBoundingClientRect().width;
+    const left = Math.max(12,Math.min(window.innerWidth-width-12,rect.right-width));
+    const desiredY = rect.bottom+8;
+    const height = panel.getBoundingClientRect().height;
+    const top = desiredY+height <= window.innerHeight-12
+      ? desiredY : Math.max(12,rect.top-height-8);
+    panel.style.left = left+'px';
+    panel.style.top = top+'px';
+    button.setAttribute('aria-expanded','true');
+    openDetailId = id;
   }
   function ensureTable() {
     const t = table();
@@ -695,20 +741,17 @@ try {
     addCSS();
     toolbar(t);
     addHeader(t);
-    updateToolbar();
+    const status = document.getElementById('ps-summary');
+    const nextStatus = summary();
+    if (status && status.textContent !== nextStatus) status.textContent = nextStatus;
     const rows = activeRowMap();
-    // Remove stale/incomplete cells after Unraid refreshes its table.
     rows.forEach((row,id) => {
       const p = cache.get(id);
-      if (!p) return;
-      const existing = row.querySelector('td.ps-cell');
-      if (!existing) row.insertAdjacentHTML('beforeend', makeCell(p));
+      if (p && !row.querySelector('.ps-cell')) row.insertAdjacentHTML('beforeend',makeCell(p));
     });
-    // Disabled entries are not returned by ShowPlugins.php. Inject them into
-    // the same table with clear metadata and an inert uninstall column.
     cache.forEach(p => {
       if (p.enabled || rows.has(p.id)) return;
-      const key = 'ps-disabled-' + p.id.replace(/[^a-z0-9_-]/gi, '_');
+      const key = 'ps-disabled-' + p.id.replace(/[^a-z0-9_-]/gi,'_');
       if (document.getElementById(key)) return;
       const row = document.createElement('tr');
       row.id = key;
@@ -720,58 +763,54 @@ try {
       t.tBodies[0]?.appendChild(row);
     });
     t.querySelectorAll('tr.ps-disabled-row').forEach(row => {
-      const id = row.querySelector('input.ps-toggle')?.dataset.id;
+      const id = row.querySelector('.ps-toggle')?.dataset.id;
       if (!id || cache.get(id)?.enabled) row.remove();
     });
-    t.querySelectorAll('td.ps-cell').forEach(cell => {
+    t.querySelectorAll('.ps-cell').forEach(cell => {
       const p = cache.get(cell.dataset.pluginSwitch);
       if (!p) return;
-      const toggle = cell.querySelector('input.ps-toggle');
-      if (document.activeElement === toggle || toggle?.dataset.busy) return;
-      if (toggle) {
-        toggle.checked = p.enabled;
-        const label = cell.querySelector('.ps-control');
-        const reason = (p.enabled ? 'Installed at boot' : 'Parked / not loaded at boot') +
-          '. ' + (p.reason || '');
-        if (label && label.title !== reason) label.title = reason;
-        const help = cell.querySelector('.ps-help');
-        if (help) {
-          if (help.title !== reason) help.title = reason;
-          if (help.getAttribute('aria-label') !== reason) help.setAttribute('aria-label', reason);
-        }
-        toggle.disabled = !p.supported;
+      const input = cell.querySelector('.ps-toggle');
+      if (!input || input.dataset.busy) return;
+      if (document.activeElement !== input) {
+        input.checked = p.enabled;
+        input.disabled = !p.supported;
       }
-      const status = cell.querySelector('.ps-state');
-      if (status && status.textContent !== getStatus(p)) status.textContent = getStatus(p);
-      const details = cell.querySelector('.ps-evidence');
-      if (details) {
-        const updated = evidence(p);
-        if (details.innerHTML !== updated) details.innerHTML = updated;
+      const title = explanation(p);
+      const label = cell.querySelector('.ps-control');
+      const button = cell.querySelector('.ps-info');
+      if (label && label.title !== title) label.title = title;
+      if (button) {
+        if (button.title !== title) button.title = title;
+        const icon = button.querySelector('.fa');
+        if (icon) {
+          const expected = p.supported ? 'fa-info-circle' : 'fa-lock';
+          if (!icon.classList.contains(expected)) icon.className = 'fa '+expected;
+        }
       }
     });
-    // Fixed-width placeholders and tablesorter may need adjustment after a new column.
     t.querySelectorAll('tbody td[colspan="6"]').forEach(td => td.colSpan = 7);
   }
-  function csrf() {
-    if (typeof window.csrf_token === 'string') return window.csrf_token;
-    return '';
+  async function fetchPlugins(force=false) {
+    const endpoint = force ? api+'?rescan=1' : api;
+    const response = await fetch(endpoint,{credentials:'same-origin',cache:'no-store'});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Unable to load plugin compatibility');
+    return data.plugins || [];
   }
-  async function refresh() {
+  async function refresh(force=false) {
     if (loading || !isPlugins()) return;
     loading = true;
     try {
-      const response = await fetch(api, {credentials:'same-origin',cache:'no-store'});
-      if (!response.ok) throw new Error('Cannot load plugin states');
-      const data = await response.json();
+      const plugins = await fetchPlugins(force);
       cache.clear();
-      (data.plugins || []).forEach(p => cache.set(p.id,p));
-      ensureTable();
+      plugins.forEach(p => cache.set(p.id,p));
+      closeDetails();
       lastFetch = Date.now();
+      ensureTable();
     } catch (e) {
       console.warn('[Plugin Switch]',e);
-    } finally {
-      loading = false;
-    }
+      if (force) window.alert('Plugin Switch: '+e.message);
+    } finally { loading = false; }
   }
   async function toggle(input) {
     const id = input.dataset.id;
@@ -779,95 +818,91 @@ try {
     if (!p || !p.supported) return;
     const enable = input.checked;
     const verb = enable ? 'enable' : 'disable';
-    if (!window.confirm('Really ' + verb + ' ' + p.name + '? Its services and interfaces may be affected immediately.')) {
-      input.checked = !enable; return;
+    if (!window.confirm('Really '+verb+' '+p.name+'? Its services may change immediately.')) {
+      input.checked = !enable;
+      return;
+    }
+    const token = csrf();
+    if (!token) {
+      input.checked = !enable;
+      window.alert('Plugin Switch: CSRF session not available. Refresh Unraid and try again.');
+      return;
     }
     input.dataset.busy = '1';
     input.disabled = true;
     try {
-      const form = new URLSearchParams({id:id,enabled:enable ? '1':'0',csrf_token:csrf()});
-      const response = await fetch(api, {
+      const body = new URLSearchParams({id,enabled:enable?'1':'0',csrf_token:token});
+      const response = await fetch(api,{
         method:'POST',credentials:'same-origin',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:form
+        body
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Plugin state change failed');
-      cache.set(id, data.plugin);
-      // Unraid's own list will now be stale: request a reload after state update.
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'State change failed. Refresh Unraid and retry.');
+      cache.set(id,data.plugin);
       window.location.reload();
     } catch (e) {
       input.checked = !enable;
-      window.alert('Plugin Switch: ' + e.message);
       delete input.dataset.busy;
       input.disabled = !p.supported;
-      await refresh();
+      window.alert('Plugin Switch: '+e.message);
     }
   }
-  document.addEventListener('change', e => {
+  function exportReport() {
+    const report = {
+      generated_at:new Date().toISOString(),
+      notice:'Local evidence only; candidate discovery does not guarantee live safety.',
+      plugins:Array.from(cache.values()).map(p => ({
+        id:p.id,name:p.name,version:p.version,enabled:p.enabled,
+        supported:p.supported,compatibility:p.compatibility
+      }))
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'plugin-switch-compatibility.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url),1000);
+  }
+  document.addEventListener('change',e => {
     if (e.target.matches('.ps-toggle')) toggle(e.target);
   });
-  document.addEventListener('click', async e => {
+  document.addEventListener('click',e => {
+    const info = e.target.closest('.ps-info');
+    if (info) { showDetails(info); return; }
+    if (e.target.closest('#ps-details-close')) { closeDetails(); return; }
+    if (!e.target.closest('#ps-details')) closeDetails();
     if (e.target.id === 'ps-rescan') {
       const button = e.target;
       if (loading) return;
       button.disabled = true;
-      loading = true;
-      try {
-        const form = new URLSearchParams({action:'rescan',csrf_token:csrf()});
-        const response = await fetch(api, {
-          method:'POST',credentials:'same-origin',
-          headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Scan failed');
-        cache.clear();
-        (data.plugins || []).forEach(p => cache.set(p.id,p));
-        lastFetch = Date.now();
-        ensureTable();
-      } catch (error) {
-        window.alert('Plugin Switch: ' + error.message);
-      } finally {
-        loading = false;
-        button.disabled = false;
-      }
+      refresh(true).finally(() => { button.disabled = false; });
     }
-    if (e.target.id === 'ps-export') {
-      const report = {
-        generated_at:new Date().toISOString(),
-        notice:'Local compatibility evidence only. Candidate discovery is NOT a live-control guarantee.',
-        plugins:Array.from(cache.values()).map(p => ({
-          id:p.id,name:p.name,version:p.version,enabled:p.enabled,
-          supported:p.supported,compatibility:p.compatibility
-        }))
-      };
-      const url = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'plugin-switch-compatibility.json';
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url),1000);
-    }
+    if (e.target.id === 'ps-export') exportReport();
   });
-  // MutationObserver handles async ShowPlugins.php list rendering.
-  let queued = false;
+  document.addEventListener('keydown',e => {
+    if (e.key === 'Escape' && openDetailId !== null) closeDetails();
+  });
+  window.addEventListener('resize',closeDetails);
+  window.addEventListener('scroll',closeDetails,true);
+
   const observer = new MutationObserver(() => {
     if (queued || !isPlugins()) return;
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
       ensureTable();
-      if (Date.now() - lastFetch > 30000) refresh();
+      if (Date.now()-lastFetch>30000) refresh();
     });
   });
   function init() {
-    observer.observe(document.body, {childList:true,subtree:true});
+    observer.observe(document.body,{childList:true,subtree:true});
     if (isPlugins()) refresh();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',init);
   else init();
 })();
-]]></INLINE><SHA256>a1725061a423a81744f15cc1f523901b261dd83557229bdae0509f289438de63</SHA256></FILE>
+]]></INLINE><SHA256>9a7446b911c1076bf78ef3ee00ec9ea84b4f4333f66b83b95c5ce91e7f7449c4</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/PluginSwitch_Loader.page"><INLINE><![CDATA[Menu="Buttons:105"
 Link="nav-user"
 ---

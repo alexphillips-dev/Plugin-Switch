@@ -1,4 +1,4 @@
-# Plugin Switch (development preview — 2026.10.29.4)
+# Plugin Switch (development preview — 2026.10.29.5)
 
 Adds an **Enabled** column to Unraid's existing **Plugins** tab. Designed for true **live** start/stop of plugins that expose a trustworthy runtime control adapter, rather than misleading everyone with a generic ON/OFF switch.
 
@@ -131,3 +131,13 @@ Evidence includes candidate service scripts, potential scheduler/kernel/network/
 3. **Expandability:** `src/profiles.json` is the audited catalog; `src/builtin-adapters/*.sh` packages reviewed adapters; `profiles/README.md` documents review and submission procedures. The UI exports on-device evidence to support future plugin reviews. No telemetry or automatic remote fetching.
 
 **Important:** The installed plugin ecosystem is not standardized. Discovering a `start/stop` script does NOT mean all scheduled tasks, WebGUI hooks, packages or kernel modifications are reversible. We do not ship fabricated compatibility profiles. Profiles for popular plugins require source review and a real Unraid test cycle before being approved.
+
+## 2026.10.29.5 — Scan CSRF and compact column
+
+- **Scan compatibility** is a read-only `GET /plugins/plugin.switch/api.php?rescan=1` request. It does not require a CSRF token because it performs no server-side user configuration changes (only refreshes bounded /run discovery cache).
+- Live enable/disable remains **POST only**, protected by the existing Unraid WebGUI authentication and native CSRF middleware. Unraid checks and removes `csrf_token` before dispatch; plugins must not validate the removed field again.
+- **Enabled** column now shows just the switch and a single icon. There are no extra text lines or nested "Why?" expansion in table rows. Clicking the icon opens a compact compatibility details panel that can be closed by clicking outside, Escape, or the close button.
+- A lock icon indicates live control isn't validated; the switch stays ON if the plugin is installed, but cannot be clicked until a verified adapter becomes available. The information panel explains why.
+- Rebuild the dev manifest with `python3 tools/build.py --branch dev`; all files are SHA-256-pinned for reliable upgrades.
+
+Use a hard browser refresh after upgrading if the older table appears cached. Production/real-Unraid testing still required.

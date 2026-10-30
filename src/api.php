@@ -12,22 +12,17 @@ function respond(int $status, array $payload): never {
 try {
     $manager = new PluginSwitchController();
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-        respond(200, ['plugins' => $manager->all()]);
+        // Compatibility scanning only reads plugin definitions and refreshes
+        // our private /run cache. Use GET for this non-mutating operation.
+        $force = ($_GET['rescan'] ?? '') === '1';
+        respond(200, ['plugins' => $manager->all($force)]);
     }
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') respond(405, ['error' => 'Method not allowed']);
-    // Unraid validates POST csrf_token in its local_prepend.php. Independently
-    // validate it here, too, so alternative hosting cannot bypass the guard.
-    $session = @parse_ini_file('/var/local/emhttp/var.ini', false, INI_SCANNER_RAW);
-    $expected = $session['csrf_token'] ?? null;
-    $received = $_POST['csrf_token'] ?? null;
-    if (!is_string($expected) || $expected === '' ||
-        !is_string($received) || !hash_equals($expected, $received)) {
-        respond(403, ['error' => 'Invalid CSRF token']);
-    }
+    // Unraid's webGUI auto_prepend (local_prepend.php) verifies CSRF tokens
+    // BEFORE this script runs, then removes csrf_token from $_POST.
+    // Validating it a second time here always fails for legitimate requests.
+    // Never expose this endpoint outside Unraid's authenticated WebGUI.
     $action = $_POST['action'] ?? 'toggle';
-    if ($action === 'rescan') {
-        respond(200, ['plugins' => $manager->all(true)]);
-    }
     if ($action !== 'toggle') respond(400, ['error' => 'Unknown operation']);
     $id = $_POST['id'] ?? null;
     $target = $_POST['enabled'] ?? null;

@@ -153,7 +153,7 @@ final class PluginSwitchController
             'version' => $version,
             'enabled' => $enabled,
             'runtime' => $runtime,
-            'supported' => $script !== null && $runtime !== 'unknown',
+            'supported' => $script !== null && (!$enabled || $runtime !== 'unknown'),
             'reason' => $reason,
         ];
     }

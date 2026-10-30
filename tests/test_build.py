@@ -1,4 +1,5 @@
 import unittest
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import importlib.util
@@ -10,13 +11,14 @@ spec.loader.exec_module(build)
 
 class BuildTests(unittest.TestCase):
     def test_manifest_matches_sources(self):
-        self.assertEqual((ROOT / 'plugin.switch.plg').read_text(), build.build())
+        branch = os.environ.get("PLUGIN_SWITCH_BRANCH", "dev")
+        self.assertEqual((ROOT / 'plugin.switch.plg').read_text(), build.build(branch))
     def test_valid_xml(self):
         root = ET.fromstring(build.build())
         self.assertEqual(root.tag, 'PLUGIN')
-        self.assertEqual(len(root.findall('FILE')), 6)
+        self.assertEqual(len(root.findall('FILE')), 7)
     def test_unraid_version_policy(self):
-        self.assertEqual(build.VERSION, "2026.10.29.1")
+        self.assertEqual(build.VERSION, "2026.10.29.2")
         build.validate_version(build.VERSION)
         self.assertIn(f'<!ENTITY version "{build.VERSION}">', build.build())
         for invalid in ("2026.10.29-dev1", "2026.13.29.1", "2026.02.30.1",
@@ -24,6 +26,25 @@ class BuildTests(unittest.TestCase):
             with self.subTest(version=invalid):
                 with self.assertRaises(ValueError):
                     build.validate_version(invalid)
+
+    def test_branch_pins_updates_and_readme_description(self):
+        for branch in ("dev", "main"):
+            with self.subTest(branch=branch):
+                root = ET.fromstring(build.build(branch))
+                self.assertEqual(root.attrib["name"], "plugin.switch")
+                self.assertEqual(root.attrib["author"], "alexphillips-dev")
+                self.assertEqual(root.attrib["pluginURL"],
+                    f"https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/{branch}/plugin.switch.plg")
+                readmes = [element for element in root.findall("FILE")
+                           if element.attrib.get("Name", "").endswith("/README.md")]
+                self.assertEqual(len(readmes), 1)
+                readme = readmes[0].findtext("INLINE")
+                self.assertIn("**Plugin Switch**", readme)
+                self.assertIn("Manage plugins", readme)
+                self.assertIn(f"**Update channel:** `{branch}`", readme)
+                self.assertNotIn("__PLUGIN_SWITCH_BRANCH__", readme)
+        with self.assertRaises(ValueError):
+            build.build("feature/test")
 
     def test_frontend_reflects_registration_not_runtime_probe(self):
         script = (ROOT / "src/switch.js").read_text()

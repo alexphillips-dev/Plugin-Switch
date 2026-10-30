@@ -22,7 +22,18 @@ Use the direct `.plg` URL under **Plugins > Install Plugin**, after validating t
 
 `https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg`
 
-Build the manifest with `python3 tools/build.py` if editing `src/` locally.
+Build the manifest with `python3 tools/build.py --branch dev` if editing `src/` locally.
+
+### Branch-aware installation and updates
+
+Each release branch contains its own generated `plugin.switch.plg` whose `pluginURL` is pinned to that branch. Installing the **dev** manifest stays on **dev** for Unraid's built-in update checks. Promoting to **main** requires generating `python3 tools/build.py --branch main` on the main release branch; then stable installations stay on **main**. **Do not use the main URL before a release has been published to main.**
+
+- Development: `https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg`
+- Stable (once published): `https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/main/plugin.switch.plg`
+
+The internal plugin ID **must remain `plugin.switch`** so existing installations and config paths aren't broken. The native Plugins page reads the visible title/description from the bundled `/usr/local/emhttp/plugins/plugin.switch/README.md`; this file begins with **Plugin Switch**. The manifest author is **alexphillips-dev**, and the bundled description includes the current update channel.
+
+`tools/build.py --check --branch dev` (or `main`) verifies that the pinned manifest matches its intended branch.
 
 ## How Plugin Switch determines support
 

@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Generate a self-contained Unraid .plg from checked-in sources."""
+"""Generate a self-contained, branch-pinned Unraid .plg."""
 from pathlib import Path
 from datetime import date
-import re
 import argparse
+import os
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "2026.10.29.1"
+VERSION = "2026.10.29.2"
+CHANNELS = ("dev", "main")
+SOURCE_FILES = {
+    "src/Controller.php": "Controller.php",
+    "src/api.php": "api.php",
+    "src/switch.js": "switch.js",
+    "src/PluginSwitch_Loader.page": "PluginSwitch_Loader.page",
+    "src/README.md": "README.md",
+}
+
 
 def validate_version(version: str) -> None:
     if not re.fullmatch(r"[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]+", version):
@@ -17,28 +27,31 @@ def validate_version(version: str) -> None:
     if patch < 1:
         raise ValueError("Patch numbers begin at 1")
 
-SOURCE_FILES = {
-    "src/Controller.php": "Controller.php",
-    "src/api.php": "api.php",
-    "src/switch.js": "switch.js",
-    "src/PluginSwitch_Loader.page": "PluginSwitch_Loader.page",
-}
-def build():
+
+def validate_branch(branch: str) -> None:
+    if branch not in CHANNELS:
+        raise ValueError(f"Unsupported release branch: {branch!r}. Choose dev or main.")
+
+
+def build(branch: str = "dev") -> str:
+    """Build a manifest whose update URL and description pin its branch."""
     validate_version(VERSION)
+    validate_branch(branch)
     begin = f'''<?xml version="1.0" standalone="yes"?>
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
-<!ENTITY author "Alex Phillips">
+<!ENTITY author "alexphillips-dev">
 <!ENTITY version "{VERSION}">
-<!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
+<!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/{branch}/plugin.switch.plg">
 ]>
-<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0">
-<CHANGES>{VERSION} - Correct installed-state display, add adapter support diagnostics, and enforce Unraid version numbering.</CHANGES>
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
+<CHANGES>{VERSION} - Branch-aware install/update URLs, display name, GitHub author, and plugin description.</CHANGES>
 '''
     parts = [begin]
     for path, name in SOURCE_FILES.items():
-        content = (ROOT / path).read_text()
-        # CDATA cannot contain a raw ]]> sequence.
+        content = (ROOT / path).read_text(encoding="utf-8")
+        if path == "src/README.md":
+            content = content.replace("__PLUGIN_SWITCH_BRANCH__", branch)
         content = content.replace("]]>", "]]]]><![CDATA[>")
         parts.append(f'<FILE Name="/usr/local/emhttp/plugins/&name;/{name}"><INLINE><![CDATA[{content}]]></INLINE></FILE>\n')
     parts.append('''<FILE Run="/bin/bash"><INLINE><![CDATA[
@@ -56,17 +69,20 @@ rm -rf /usr/local/emhttp/plugins/plugin.switch
 ''')
     return ''.join(parts)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--branch", choices=CHANNELS, default=os.environ.get("PLUGIN_SWITCH_BRANCH", "dev"),
+                        help="GitHub branch to pin for future updates (default: dev)")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     target = ROOT / "plugin.switch.plg"
-    value = build()
+    value = build(args.branch)
     if args.check:
-        if not target.exists() or target.read_text() != value:
-            print("plugin.switch.plg is out of date", file=sys.stderr)
+        if not target.exists() or target.read_text(encoding="utf-8") != value:
+            print(f"plugin.switch.plg does not match {args.branch} build", file=sys.stderr)
             sys.exit(1)
-        print("Manifest current")
+        print(f"Manifest current for {args.branch} ({VERSION})")
     else:
-        target.write_text(value)
-        print(f"Wrote {target}")
+        target.write_text(value, encoding="utf-8")
+        print(f"Wrote {target} for {args.branch} ({VERSION})")

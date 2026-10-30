@@ -3,6 +3,8 @@ on:
   push:
     branches: [dev, main]
   pull_request:
+env:
+  PLUGIN_SWITCH_BRANCH: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
 jobs:
   validate:
     runs-on: ubuntu-latest

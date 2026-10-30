@@ -1,12 +1,12 @@
 <?xml version="1.0" standalone="yes"?>
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
-<!ENTITY author "Alex Phillips">
-<!ENTITY version "2026.10.29.1">
+<!ENTITY author "alexphillips-dev">
+<!ENTITY version "2026.10.29.2">
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
 ]>
-<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0">
-<CHANGES>2026.10.29.1 - Correct installed-state display, add adapter support diagnostics, and enforce Unraid version numbering.</CHANGES>
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
+<CHANGES>2026.10.29.2 - Branch-aware install/update URLs, display name, GitHub author, and plugin description.</CHANGES>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Controller.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 
@@ -542,6 +542,12 @@ Link="nav-user"
 $asset = (string)@filemtime('/usr/local/emhttp/plugins/plugin.switch/switch.js');
 ?>
 <script src="/plugins/plugin.switch/switch.js?v=<?= htmlspecialchars($asset, ENT_QUOTES) ?>" defer></script>
+]]></INLINE></FILE>
+<FILE Name="/usr/local/emhttp/plugins/&name;/README.md"><INLINE><![CDATA[**Plugin Switch**
+
+Manage plugins from Unraid's existing **Plugins** tab with an Enabled toggle. Supported plugins can be safely stopped and restarted without uninstalling them; settings are preserved. Plugins without a verified live-control adapter remain installed, with their toggle locked and an explanation shown.
+
+**Update channel:** `dev`. Updates follow the same GitHub branch used for installation.
 ]]></INLINE></FILE>
 <FILE Run="/bin/bash"><INLINE><![CDATA[
 set -eu

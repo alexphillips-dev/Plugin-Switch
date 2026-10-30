@@ -47,10 +47,10 @@ If it still fails, run these diagnostic commands from the **Unraid terminal**:
 
 ```bash
 curl -fL --connect-timeout 10 --max-time 30 \
-  -o /tmp/plugin.switch-download.plg \
+  -o /tmp/plugin.switch.plg \
   https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg
-head -n 8 /tmp/plugin.switch-download.plg
-plugin install /tmp/plugin.switch-download.plg
+head -n 8 /tmp/plugin.switch.plg
+plugin install /tmp/plugin.switch.plg
 ```
 
 The first command must download XML beginning with `<?xml`. The installer output should include a concrete error if it fails. You can also check `/var/log/syslog` for `plugin-manager` messages. If the download fails, check Unraid DNS, HTTPS access, and filtering of `raw.githubusercontent.com`. Do not disable DNS/security filtering broadly to work around a plugin install.

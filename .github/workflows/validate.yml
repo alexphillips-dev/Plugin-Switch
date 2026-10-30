@@ -18,6 +18,8 @@ jobs:
           php -l src/api.php
       - name: Validate JavaScript
         run: node --check src/switch.js
+      - name: Test controller behavior
+        run: php tests/controller_test.php
       - name: Validate generated manifest
         run: |
           python3 tools/build.py --check

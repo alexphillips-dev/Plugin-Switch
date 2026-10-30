@@ -2,11 +2,11 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
 <!ENTITY author "alexphillips-dev">
-<!ENTITY version "2026.10.29.8">
+<!ENTITY version "2026.10.29.9">
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>2026.10.29.8 - Left-align the switch and lock icon inside the Enabled column.</CHANGES>
+<CHANGES>2026.10.29.9 - Add transaction recovery, dependency guards, bounded probes, update diagnostics and improved toolbar.</CHANGES>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Compatibility.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 
@@ -94,8 +94,8 @@ final class PluginSwitchCompatibility
     public function scan(string $id, string $manifest, bool $force = false): array
     {
         $result = [
-            'classification' => self::protectedId($id) ? 'protected' : 'next-boot',
-            'reason' => 'No audited, reversible live-control method has been verified.',
+            'classification' => self::protectedId($id) ? 'protected' : 'unverified',
+            'reason' => 'No audited, reversible live-control method has been verified; no live-control action is available.',
             'services' => [],
             'signals' => [],
             'profile' => null,
@@ -207,15 +207,381 @@ final class PluginSwitchCompatibility
         return $result;
     }
 }
-]]></INLINE><SHA256>29ac5dcf762bea71a4b5019cf01da5cefe3bb8816f75f5183b5e994789739c5c</SHA256></FILE>
+]]></INLINE><SHA256>f0d697b52d81bb3f8b8e390a58b378defca26401b936f4f519ddce69c4d55de3</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/profiles.json"><INLINE><![CDATA[{
   "schema_version": 1,
   "profiles": []
 }
 ]]></INLINE><SHA256>4dfaa8e5ed9db3f50cfbe62f9ec06603e87c6ce9a22fff5741629a578b4c1111</SHA256></FILE>
+<FILE Name="/usr/local/emhttp/plugins/&name;/Safety.php"><INLINE><![CDATA[<?php
+declare(strict_types=1);
+
+/**
+ * Persistent, fail-closed safety configuration and recovery journal.
+ * No root-service or plugin commands are executed by this class.
+ */
+final class PluginSwitchSafety
+{
+    private string $root;
+    private string $journalDir;
+    private string $history;
+
+    public function __construct(string $boot = '/boot/config/plugins')
+    {
+        $this->root = rtrim($boot, '/') . '/plugin.switch';
+        $this->journalDir = $this->root . '/transactions';
+        $this->history = $this->root . '/history.json';
+    }
+
+    public static function validId(string $id): bool
+    {
+        return strlen($id) <= 128 &&
+            preg_match('/^[a-zA-Z0-9][a-zA-Z0-9._-]*\\.plg$/D', $id) === 1;
+    }
+
+    private function config(): array
+    {
+        $path = $this->root . '/safety.json';
+        if (!is_file($path) || is_link($path) || (@filesize($path) ?: 0) > 65536) return [];
+        $data = json_decode((string)@file_get_contents($path), true);
+        return is_array($data) ? $data : [];
+    }
+
+    public function protectReason(string $id, array $enabled): ?string
+    {
+        if (!self::validId($id)) return 'Invalid plugin identifier.';
+        if (in_array(strtolower($id), ['plugin.switch.plg','unraidserver.plg'], true)) {
+            return 'Protected system or Plugin Switch component.';
+        }
+        $config = $this->config();
+        foreach (($config['protected'] ?? []) as $protected) {
+            if ($protected === $id) return 'Plugin protected by administrator policy.';
+        }
+        foreach (($config['depends_on'] ?? []) as $dependent => $required) {
+            if (!in_array($dependent, $enabled, true) || !is_array($required)) continue;
+            if (in_array($id, $required, true)) {
+                return 'Required by enabled plugin ' . $dependent . '.';
+            }
+        }
+        return null;
+    }
+
+    private function directory(): void
+    {
+        if (!is_dir($this->journalDir) && !@mkdir($this->journalDir, 0700, true)) {
+            throw new RuntimeException('Cannot create transaction journal.');
+        }
+    }
+
+    private function writeJson(string $path, array $value): void
+    {
+        $this->directory();
+        if (is_link($path)) throw new RuntimeException('Journal symlink refused.');
+        $temp = @tempnam($this->journalDir, '.ps-');
+        if ($temp === false) throw new RuntimeException('Cannot create journal temporary file.');
+        @chmod($temp, 0600);
+        try {
+            $json = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+            if ($json === false || @file_put_contents($temp, $json, LOCK_EX) === false ||
+                !@rename($temp, $path)) throw new RuntimeException('Cannot persist transaction.');
+        } finally {
+            @unlink($temp);
+        }
+    }
+
+    private function journalFile(string $id): string
+    {
+        if (!self::validId($id)) throw new RuntimeException('Invalid plugin identifier.');
+        return $this->journalDir . '/' . $id . '.json';
+    }
+
+    public function pending(string $id): ?array
+    {
+        $file = $this->journalFile($id);
+        if (!is_file($file) || is_link($file)) return null;
+        $data = json_decode((string)@file_get_contents($file), true);
+        return is_array($data) ? $data : ['phase'=>'corrupt','id'=>$id];
+    }
+
+    public function allPending(): array
+    {
+        $results = [];
+        foreach (glob($this->journalDir . '/*.plg.json') ?: [] as $file) {
+            $id = substr(basename($file), 0, -5);
+            if (!self::validId($id)) continue;
+            $data = $this->pending($id);
+            if ($data) $results[$id] = $data;
+        }
+        return $results;
+    }
+
+    public function begin(string $id, string $operation): void
+    {
+        if ($this->pending($id)) throw new RuntimeException('Unfinished transaction. Use recovery diagnostics.');
+        if (!in_array($operation, ['enable','disable'], true)) throw new RuntimeException('Invalid operation.');
+        $this->writeJson($this->journalFile($id), [
+            'id'=>$id, 'operation'=>$operation, 'phase'=>'starting', 'time'=>gmdate('c')
+        ]);
+    }
+
+    public function phase(string $id, string $phase): void
+    {
+        $entry = $this->pending($id);
+        if (!$entry) throw new RuntimeException('Transaction not found.');
+        $entry['phase'] = $phase;
+        $this->writeJson($this->journalFile($id), $entry);
+    }
+
+    public function end(string $id, string $outcome): void
+    {
+        $entry = $this->pending($id);
+        if (!$entry) return;
+        $entry['outcome'] = $outcome;
+        $entry['completed_at'] = gmdate('c');
+        $records = $this->history();
+        $records[] = $entry;
+        $records = array_slice($records, -100);
+        $this->writeJson($this->history, $records);
+        @unlink($this->journalFile($id));
+    }
+
+    public function history(): array
+    {
+        if (!is_file($this->history) || is_link($this->history) || (@filesize($this->history) ?: 0) > 65536) return [];
+        $data = json_decode((string)@file_get_contents($this->history), true);
+        return is_array($data) ? $data : [];
+    }
+
+    public function recoverInterruptedNextBoot(string $boot): array
+    {
+        $boot = rtrim($boot, '/');
+        $park = $boot . '/plugin.switch/disabled';
+        $result = ['recovered'=>[], 'manual'=>[], 'reboot_required'=>false];
+        foreach ($this->allPending() as $id => $entry) {
+            $target = $boot . '/' . $id;
+            $disabled = $park . '/' . $id;
+            if (is_link($target) || is_link($disabled) ||
+                (is_file($target) && is_file($disabled))) {
+                $result['manual'][$id] = 'Conflicting or unsafe manifests; manual review required.';
+                continue;
+            }
+            if (is_file($disabled)) {
+                if (!@rename($disabled, $target)) {
+                    $result['manual'][$id] = 'Cannot restore manifest.';
+                    continue;
+                }
+                $result['reboot_required'] = true;
+            }
+            if (!is_file($target)) {
+                $result['manual'][$id] = 'No valid manifest available.';
+                continue;
+            }
+            $this->end($id, 'recovered-next-boot');
+            $result['recovered'][] = $id;
+        }
+        return $result;
+    }
+
+    /**
+     * Emergency recovery is boot-only: moving a parked manifest back into the
+     * startup scan is safer than automatically executing unknown installers.
+     * Never overwrite existing manifests or process active transactions.
+     */
+    public function restoreNextBoot(string $boot): array
+    {
+        $boot = rtrim($boot, '/');
+        $park = $boot . '/plugin.switch/disabled';
+        $result = ['restored'=>[], 'skipped'=>[], 'reboot_required'=>false];
+        foreach (glob($park . '/*.plg') ?: [] as $file) {
+            $id = basename($file);
+            if (!self::validId($id) || is_link($file) ||
+                in_array(strtolower($id), ['plugin.switch.plg','unraidserver.plg'], true)) {
+                continue;
+            }
+            $target = $boot . '/' . $id;
+            if ($this->pending($id) || file_exists($target) || is_link($target)) {
+                $result['skipped'][$id] = 'Pending operation or manifest conflict.';
+                continue;
+            }
+            if (@rename($file, $target)) {
+                $result['restored'][] = $id;
+                $result['reboot_required'] = true;
+            } else {
+                $result['skipped'][$id] = 'Could not restore manifest.';
+            }
+        }
+        return $result;
+    }
+}
+]]></INLINE><SHA256>e05c90a1a16a569a61e007551ea458dc596de02914ae0625afd853f7c6dcc7f7</SHA256></FILE>
+<FILE Name="/usr/local/emhttp/plugins/&name;/ProbePool.php"><INLINE><![CDATA[<?php
+declare(strict_types=1);
+
+/** Bounded parallel, read-only status probes; one slow adapter cannot stall all rows. */
+final class PluginSwitchProbePool
+{
+    public static function check(array $scripts, int $limit = 4): array
+    {
+        $limit = max(1, min(6, $limit));
+        $queue = array_keys($scripts);
+        $active = [];
+        $results = [];
+        while ($queue || $active) {
+            while (count($active) < $limit && $queue) {
+                $id = array_shift($queue);
+                $script = $scripts[$id];
+                // All scripts were already validated by adapterInfo() before
+                // reaching this pool. We NEVER execute scanner-discovered paths.
+                $proc = @proc_open(
+                    ['/usr/bin/timeout','--kill-after=1s','5s','/bin/bash',$script,'status'],
+                    [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],
+                    $pipes,
+                    null,
+                    ['PATH'=>'/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin']
+                );
+                if (!is_resource($proc)) {
+                    $results[$id] = ['error'=>'Could not start status probe.'];
+                    continue;
+                }
+                fclose($pipes[0]);
+                stream_set_blocking($pipes[1], false);
+                stream_set_blocking($pipes[2], false);
+                $active[$id] = ['proc'=>$proc,'pipes'=>$pipes,'output'=>'','error'=>''];
+            }
+            foreach ($active as $id => &$task) {
+                $task['output'] .= (string)@stream_get_contents($task['pipes'][1], max(1, 512-strlen($task['output'])));
+                $task['error'] .= (string)@stream_get_contents($task['pipes'][2], max(1, 256-strlen($task['error'])));
+                $state = proc_get_status($task['proc']);
+                if ($state['running']) continue;
+                $task['output'] .= (string)@stream_get_contents($task['pipes'][1], max(1, 512-strlen($task['output'])));
+                fclose($task['pipes'][1]);
+                fclose($task['pipes'][2]);
+                proc_close($task['proc']);
+                $value = trim($task['output']);
+                if ($state['exitcode'] === 0 && in_array($value, ['enabled','disabled'], true)) {
+                    $results[$id] = ['state'=>$value];
+                } else {
+                    $results[$id] = ['error'=>'Status probe returned an invalid result or timed out.'];
+                }
+                unset($active[$id]);
+            }
+            unset($task);
+            if ($active) usleep(20000);
+        }
+        return $results;
+    }
+}
+]]></INLINE><SHA256>8cef60adb6da4c0da16934b260180737b288024605a8614fd3426f610c88ba12</SHA256></FILE>
+<FILE Name="/usr/local/emhttp/plugins/&name;/Release.php"><INLINE><![CDATA[<?php
+declare(strict_types=1);
+
+/** Branch-pinned, opt-in update diagnostics; no automatic network requests. */
+final class PluginSwitchRelease
+{
+    private string $manifest;
+    private string $cache;
+
+    public function __construct(
+        string $manifest = '/boot/config/plugins/plugin.switch.plg',
+        string $cache = '/run/plugin-switch/update.json'
+    ) {
+        $this->manifest = $manifest;
+        $this->cache = $cache;
+    }
+
+    public static function versionOf(string $xml): ?string
+    {
+        if (preg_match('/<!ENTITY\\s+version\\s+"([0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]+)"\\s*>/', $xml, $m)) return $m[1];
+        if (preg_match('/<PLUGIN\\b[^>]*\\bversion="([0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]+)"/', $xml, $m)) return $m[1];
+        return null;
+    }
+
+    public function local(): array
+    {
+        if (!is_file($this->manifest) || is_link($this->manifest)) {
+            return ['installed_version'=>null, 'branch'=>null, 'update_url'=>null,
+                'error'=>'Installed Plugin Switch manifest not found.'];
+        }
+        $source = (string)@file_get_contents($this->manifest, false, null, 0, 8192);
+        $url = null;
+        if (preg_match('/<!ENTITY\\s+pluginURL\\s+"([^"]+)"\\s*>/', $source, $m)) $url = $m[1];
+        $allowed = '#^https://raw\\.githubusercontent\\.com/alexphillips-dev/Plugin-Switch/(dev|main)/plugin\\.switch\\.plg$#D';
+        if (!is_string($url) || !preg_match($allowed, $url, $match)) {
+            return ['installed_version'=>self::versionOf($source), 'branch'=>null,
+                'update_url'=>$url, 'error'=>'Update URL is not a supported dev/main endpoint.'];
+        }
+        return ['installed_version'=>self::versionOf($source), 'branch'=>$match[1],
+            'update_url'=>$url, 'error'=>null];
+    }
+
+    public function check(bool $force = false): array
+    {
+        $local = $this->local();
+        if ($local['error']) return $local;
+        if (!$force && is_file($this->cache) && !is_link($this->cache) &&
+            (int)@filemtime($this->cache) > time() - 600) {
+            $data = json_decode((string)@file_get_contents($this->cache), true);
+            if (is_array($data) && ($data['update_url'] ?? null) === $local['update_url']) return $data;
+        }
+        $result = $local + ['latest_version'=>null, 'available'=>false, 'checked_at'=>gmdate('c')];
+        if (!function_exists('curl_init')) {
+            $result['error'] = 'PHP curl extension is unavailable.';
+            return $result;
+        }
+        $ch = curl_init($local['update_url']);
+        if ($ch === false) {
+            $result['error'] = 'Could not start update check.';
+            return $result;
+        }
+        $payload = '';
+        curl_setopt_array($ch, [
+            CURLOPT_FOLLOWLOCATION=>false,
+            CURLOPT_CONNECTTIMEOUT=>3,
+            CURLOPT_TIMEOUT=>8,
+            CURLOPT_USERAGENT=>'Plugin-Switch-update-check/1',
+            CURLOPT_WRITEFUNCTION=>static function ($curl, string $chunk) use (&$payload): int {
+                if (strlen($payload) + strlen($chunk) > 262144) return 0;
+                $payload .= $chunk;
+                return strlen($chunk);
+            }
+        ]);
+        $ok = curl_exec($ch);
+        $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+        if ($ok !== true || $status !== 200) {
+            $result['error'] = 'Update check failed (HTTP ' . $status . '): ' . substr($error, 0, 100);
+            return $result;
+        }
+        $result['latest_version'] = self::versionOf($payload);
+        if ($result['latest_version'] === null) {
+            $result['error'] = 'Release manifest has no recognized version.';
+            return $result;
+        }
+        $result['available'] = $result['installed_version'] !== null &&
+            version_compare($result['latest_version'], $result['installed_version'], '>');
+        $result['error'] = null;
+        $dir = dirname($this->cache);
+        if (is_dir($dir) || @mkdir($dir, 0700, true)) {
+            if (!is_link($this->cache)) {
+                $temp = @tempnam($dir, '.update-');
+                if ($temp !== false) {
+                    @chmod($temp, 0600);
+                    @file_put_contents($temp, json_encode($result), LOCK_EX);
+                    @rename($temp, $this->cache);
+                    @unlink($temp);
+                }
+            }
+        }
+        return $result;
+    }
+}
+]]></INLINE><SHA256>164ca82d932ec69371ee5a7e5051d0ffa23505ac170de150426fa605df93b0c0</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Controller.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 require_once __DIR__ . '/Compatibility.php';
+require_once __DIR__ . '/Safety.php';
+require_once __DIR__ . '/ProbePool.php';
 
 /**
  * Plugin Switch runtime controller.
@@ -232,13 +598,15 @@ final class PluginSwitchController
     private string $run;
     private string $pluginCommand;
     private PluginSwitchCompatibility $scanner;
+    private PluginSwitchSafety $safety;
 
     public function __construct(
         string $boot = '/boot/config/plugins',
         string $installed = '/var/log/plugins',
         string $run = '/run/plugin-switch',
         string $pluginCommand = '/usr/local/sbin/plugin',
-        ?PluginSwitchCompatibility $scanner = null
+        ?PluginSwitchCompatibility $scanner = null,
+        ?PluginSwitchSafety $safety = null
     ) {
         $this->boot = rtrim($boot, '/');
         $this->park = $this->boot . '/plugin.switch/disabled';
@@ -247,6 +615,7 @@ final class PluginSwitchController
         $this->run = rtrim($run, '/');
         $this->pluginCommand = $pluginCommand;
         $this->scanner = $scanner ?? new PluginSwitchCompatibility();
+        $this->safety = $safety ?? new PluginSwitchSafety($this->boot);
     }
 
     private function validId(string $id): bool
@@ -342,7 +711,7 @@ final class PluginSwitchController
         }
     }
 
-    private function details(string $id, string $plg, bool $enabled, bool $rescan = false): array
+    private function details(string $id, string $plg, bool $enabled, bool $rescan = false, ?array $probe = null): array
     {
         $name = substr($id, 0, -4);
         $author = '';
@@ -360,11 +729,21 @@ final class PluginSwitchController
             }
         }
         $compat = $this->scanner->scan($id, $plg, $rescan);
+        $pending = $this->safety->pending($id);
+        $enabledIds = array_map('basename', glob($this->installed . '/*.plg') ?: []);
+        $protection = $this->safety->protectReason($id, $enabledIds);
         [$script, $support, $reason] = $this->adapterInfo($id, $plg);
         $runtime = 'unknown';
         if ($script !== null) {
             try {
-                $runtime = $this->state($script);
+                if ($probe !== null) {
+                    if (!isset($probe['state'])) {
+                        throw new RuntimeException($probe['error'] ?? 'Status probe failed.');
+                    }
+                    $runtime = $probe['state'];
+                } else {
+                    $runtime = $this->state($script);
+                }
             } catch (Throwable $e) {
                 // A parked plugin may need its files installed before its
                 // adapter can report status. Restore remains possible.
@@ -378,6 +757,14 @@ final class PluginSwitchController
         // based on a name or init script existing in the filesystem.
         $supported = $script !== null && (!$enabled || $runtime !== 'unknown');
         if ($support === 'protected') $supported = false;
+        if ($pending || $protection) {
+            $supported = false;
+            $support = $pending ? 'interrupted' : 'protected';
+            $reason = $pending
+                ? 'Interrupted operation detected. Use Recovery to prepare a safe next-boot restoration.'
+                : $protection;
+            $compat['classification'] = $pending ? 'needs-recovery' : 'protected';
+        }
         if ($supported) {
             $compat['classification'] = 'live';
             $compat['reason'] = $support === 'verified-profile'
@@ -400,33 +787,38 @@ final class PluginSwitchController
             'compatibility' => $compat,
             'supported' => $supported,
             'reason' => $reason,
+            'pending' => $pending,
         ];
     }
 
     public function all(bool $rescan = false): array
     {
         $items = [];
+        $sources = [];
         foreach (glob($this->installed . '/*.plg') ?: [] as $link) {
-            if (!is_link($link)) {
-                continue;
-            }
+            if (!is_link($link)) continue;
             $id = basename($link);
-            if (!$this->validId($id) && !PluginSwitchCompatibility::protectedId($id)) {
-                continue;
-            }
-            $bootFile = $this->boot . '/' . $id;
-            // Only manage regular user plugin definitions on the boot flash.
-            if (!is_file($bootFile) || is_link($bootFile) || realpath($link) !== realpath($bootFile)) {
-                continue;
-            }
-            $items[$id] = $this->details($id, $bootFile, true, $rescan);
+            if (!$this->validId($id) && !PluginSwitchCompatibility::protectedId($id)) continue;
+            $file = $this->boot . '/' . $id;
+            if (!is_file($file) || is_link($file) || realpath($link) !== realpath($file)) continue;
+            $sources[$id] = ['path'=>$file, 'enabled'=>true];
         }
         foreach (glob($this->park . '/*.plg') ?: [] as $file) {
             $id = basename($file);
-            if (!$this->validId($id) || is_link($file) || isset($items[$id])) {
-                continue;
-            }
-            $items[$id] = $this->details($id, $file, false, $rescan);
+            if (!$this->validId($id) || is_link($file) || isset($sources[$id])) continue;
+            $sources[$id] = ['path'=>$file, 'enabled'=>false];
+        }
+        // Static discovery runs in the web request; only verified status
+        // adapters execute in bounded parallel jobs (4 simultaneous max).
+        $scripts = [];
+        foreach ($sources as $id => $source) {
+            [$script] = $this->adapterInfo($id, $source['path']);
+            if ($script !== null) $scripts[$id] = $script;
+        }
+        $probes = PluginSwitchProbePool::check($scripts);
+        foreach ($sources as $id => $source) {
+            $items[$id] = $this->details($id, $source['path'], $source['enabled'],
+                $rescan, $probes[$id] ?? null);
         }
         ksort($items, SORT_NATURAL | SORT_FLAG_CASE);
         return array_values($items);
@@ -443,10 +835,19 @@ final class PluginSwitchController
             throw new RuntimeException('Could not lock plugin operations.');
         }
         try {
+            $enabledIds = array_map('basename', glob($this->installed . '/*.plg') ?: []);
+            if (!$enable && ($reason = $this->safety->protectReason($id, $enabledIds))) {
+                throw new RuntimeException($reason);
+            }
+            if ($this->safety->pending($id)) {
+                throw new RuntimeException('Interrupted transaction; use Recovery before retrying.');
+            }
             [$script, , $adapterReason] = $this->adapterInfo($id, $enable ? $disabled : $active);
             if ($script === null) {
                 throw new RuntimeException($adapterReason);
             }
+            $this->safety->begin($id, $enable ? 'enable' : 'disable');
+            try {
             if ($enable) {
                 if (!is_file($disabled) || is_link($disabled) || file_exists($active)) {
                     throw new RuntimeException('Plugin is not safely parked, or an active file conflicts.');
@@ -459,6 +860,7 @@ final class PluginSwitchController
                     if (!rename($disabled, $active)) {
                         throw new RuntimeException('Could not restore plugin manifest.');
                     }
+                    $this->safety->phase($id, 'manifest-restored');
                     if (!symlink($active, $link)) {
                         rename($active, $disabled);
                         throw new RuntimeException('Could not restore installed plugin registration.');
@@ -473,6 +875,7 @@ final class PluginSwitchController
                         throw $e;
                     }
                     @unlink($marker);
+                    $this->safety->phase($id, 'runtime-restored');
                 } else {
                     // A reboot has removed the plugin's installed files.
                     // Use the official install lifecycle, then verify the adapter.
@@ -480,6 +883,7 @@ final class PluginSwitchController
                     if ($code !== 0 || !is_file($active) || !is_link($link)) {
                         throw new RuntimeException('Unraid could not reinstall the parked plugin. ' . substr($stderr, 0, 200));
                     }
+                    $this->safety->phase($id, 'reinstalled');
                     if ($this->state($script) !== 'enabled') {
                         $this->action($script, 'start');
                     }
@@ -500,34 +904,103 @@ final class PluginSwitchController
                 if ($this->state($script) !== 'disabled') {
                     $this->action($script, 'stop');
                 }
+                $this->safety->phase($id, 'runtime-stopped');
                 if (!rename($active, $disabled)) {
                     // Do not report success if persistence failed.
                     $this->action($script, 'start');
                     throw new RuntimeException('Could not park the plugin manifest.');
                 }
+                $this->safety->phase($id, 'manifest-parked');
                 if (!unlink($link)) {
                     @rename($disabled, $active);
                     $this->action($script, 'start');
                     throw new RuntimeException('Could not unregister the stopped plugin.');
                 }
-                file_put_contents($marker, 'stopped this boot', LOCK_EX);
+                if (@file_put_contents($marker, 'stopped this boot', LOCK_EX) === false) {
+                    throw new RuntimeException('Cannot save same-boot restore marker.');
+                }
+                $this->safety->phase($id, 'parked');
             }
+            $this->safety->end($id, 'success');
             error_log('[plugin.switch] ' . ($enable ? 'enabled ' : 'disabled ') . $id);
             $file = $enable ? $active : $disabled;
             return $this->details($id, $file, $enable);
+            } catch (Throwable $operationError) {
+                // Best-effort synchronous rollback. Never silently claim
+                // success if the plugin or runtime cannot be restored.
+                try {
+                    if (!$enable && is_file($disabled) && !is_file($active)) {
+                        if (!@rename($disabled, $active)) throw new RuntimeException('Manifest rollback failed.');
+                    }
+                    if (!$enable && is_file($active) && !is_link($link)) {
+                        if (!@symlink($active, $link)) throw new RuntimeException('Registration rollback failed.');
+                    }
+                    if (!$enable && $this->state($script) !== 'enabled') {
+                        $this->action($script, 'start');
+                    }
+                    // Enabling a plugin after reboot may partially install it.
+                    // Leave this transaction pending for explicit recovery.
+                    if ($enable && !is_file($disabled)) {
+                        throw new RuntimeException('Enable interrupted; intervention required.');
+                    }
+                    if ($enable && !is_file($active)) {
+                        // The original parked manifest remains intact.
+                        $this->safety->end($id, 'failed-no-change');
+                    } elseif (!$enable && is_file($active) && is_link($link)) {
+                        $this->safety->end($id, 'rolled-back');
+                    }
+                } catch (Throwable $rollbackError) {
+                    error_log('[plugin.switch] rollback failure ' . $id . ': ' . $rollbackError->getMessage());
+                    throw new RuntimeException($operationError->getMessage() .
+                        ' Rollback incomplete; use Recovery before retrying.');
+                }
+                throw $operationError;
+            }
         } finally {
             flock($lock, LOCK_UN);
             fclose($lock);
         }
     }
+
+    /**
+     * No service restarts are attempted in emergency recovery. Restored plugin
+     * definitions take effect at the NEXT boot only.
+     */
+    public function recoverNextBoot(): array
+    {
+        if (!is_dir($this->run)) @mkdir($this->run, 0700, true);
+        $lock = @fopen($this->run . '/controller.lock', 'c');
+        if ($lock === false || !flock($lock, LOCK_EX)) {
+            throw new RuntimeException('Could not acquire recovery lock.');
+        }
+        try {
+            $interrupted = $this->safety->recoverInterruptedNextBoot($this->boot);
+            $parked = $this->safety->restoreNextBoot($this->boot);
+            return ['interrupted'=>$interrupted, 'parked'=>$parked,
+                'reboot_required'=>($interrupted['reboot_required'] || $parked['reboot_required'])];
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    public function diagnostics(): array
+    {
+        return [
+            'pending'=>$this->safety->allPending(),
+            'history'=>array_slice($this->safety->history(), -20),
+            'protection_config'=>$this->boot . '/plugin.switch/safety.json',
+        ];
+    }
 }
-]]></INLINE><SHA256>5cc4fe83a3ab017730889d2415392505d64eb84bee73f8faa6cb8b1e7e6990b3</SHA256></FILE>
+]]></INLINE><SHA256>6dd87247755f638cbbbea6d8ca82bc6a85331391387877551dc2284b10cca539</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/api.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 require_once __DIR__ . '/Controller.php';
+require_once __DIR__ . '/Release.php';
 function respond(int $status, array $payload): never {
     http_response_code($status);
     echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
@@ -538,6 +1011,12 @@ try {
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         // Compatibility scanning only reads plugin definitions and refreshes
         // our private /run cache. Use GET for this non-mutating operation.
+        if (($_GET['diagnostics'] ?? '') === '1') {
+            respond(200, $manager->diagnostics());
+        }
+        if (($_GET['updates'] ?? '') === '1') {
+            respond(200, (new PluginSwitchRelease())->check(($_GET['force'] ?? '') === '1'));
+        }
         $force = ($_GET['rescan'] ?? '') === '1';
         respond(200, ['plugins' => $manager->all($force)]);
     }
@@ -547,6 +1026,12 @@ try {
     // Validating it a second time here always fails for legitimate requests.
     // Never expose this endpoint outside Unraid's authenticated WebGUI.
     $action = $_POST['action'] ?? 'toggle';
+    if ($action === 'recover') {
+        if (($_POST['confirmation'] ?? '') !== 'RESTORE') {
+            respond(400, ['error'=>'Explicit recovery confirmation required.']);
+        }
+        respond(200, ['result'=>$manager->recoverNextBoot()]);
+    }
     if ($action !== 'toggle') respond(400, ['error' => 'Unknown operation']);
     $id = $_POST['id'] ?? null;
     $target = $_POST['enabled'] ?? null;
@@ -557,7 +1042,7 @@ try {
 } catch (Throwable $e) {
     respond(409, ['error' => $e->getMessage()]);
 }
-]]></INLINE><SHA256>27c4ac862ee079bfb548dceaa84973c91ba54715ed05658a9ed76e3a405bea54</SHA256></FILE>
+]]></INLINE><SHA256>a4d9764871b8e5a6edcfa201d1f713a1d76e0c2d023aef268e2303fa140dde4c</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/switch.js"><INLINE><![CDATA[
 (() => {
   'use strict';
@@ -650,12 +1135,13 @@ try {
     return document.querySelector('input[name="csrf_token"]')?.value || '';
   }
   function compatibilityStatus(p) {
+    if (p.support === 'interrupted' || p.compatibility?.classification === 'needs-recovery') return 'Recovery required';
     if (p.support === 'protected' || p.compatibility?.classification === 'protected') return 'Protected';
     if (p.supported) return p.enabled ? 'Live control available' : 'Restore available';
     if (p.compatibility?.classification === 'candidate') return 'Needs review';
     if (p.support === 'invalid-adapter') return 'Adapter blocked';
     if (p.support === 'status-error') return 'Adapter error';
-    return 'No live control';
+    return 'No verified live control';
   }
   function explanation(p) {
     return (p.enabled ? 'Installed' : 'Parked')+' · '+compatibilityStatus(p)+'. '+
@@ -803,19 +1289,47 @@ try {
     if (document.getElementById('ps-toolbar')) return;
     const bar = document.createElement('div');
     bar.id = 'ps-toolbar';
+    // Unraid's theme floats default buttons left. Force toolbar and group
+    // alignment independently of all table and global button styles.
+    bar.style.setProperty('display','flex','important');
+    bar.style.setProperty('align-items','center','important');
+    bar.style.setProperty('justify-content','flex-end','important');
+    bar.style.setProperty('width','100%','important');
+    bar.style.setProperty('gap','12px','important');
+    bar.style.setProperty('flex-wrap','wrap','important');
+    bar.style.setProperty('margin','8px 0','important');
     bar.innerHTML = '<span id="ps-summary" aria-live="polite"></span>'+
+      '<div id="ps-toolbar-actions">'+
+      '<button type="button" id="ps-updates">Check updates</button>'+
+      '<button type="button" id="ps-recovery">Recovery</button>'+
       '<button type="button" id="ps-rescan" title="Refresh read-only compatibility discovery">Scan compatibility</button>'+
-      '<button type="button" id="ps-export" title="Download compatibility evidence locally">Export report</button>';
+      '<button type="button" id="ps-export" title="Download compatibility evidence locally">Export report</button>'+
+      '</div>';
+    const summary = bar.querySelector('#ps-summary');
+    summary.style.setProperty('margin-right','auto','important');
+    summary.style.setProperty('flex','1 0 auto','important');
+    const actions = bar.querySelector('#ps-toolbar-actions');
+    actions.style.setProperty('display','flex','important');
+    actions.style.setProperty('align-items','center','important');
+    actions.style.setProperty('justify-content','flex-end','important');
+    actions.style.setProperty('gap','8px','important');
+    actions.style.setProperty('margin-left','auto','important');
+    actions.style.setProperty('flex-wrap','wrap','important');
+    for (const button of actions.querySelectorAll('button')) {
+      button.style.setProperty('float','none','important');
+      button.style.setProperty('margin','0','important');
+    }
     t.parentNode.insertBefore(bar,t);
   }
   function summary() {
-    const counts = {live:0,candidate:0,'next-boot':0,protected:0};
+    const counts = {live:0,candidate:0,unverified:0,protected:0,'needs-recovery':0};
     plugins.forEach(p => {
       const c = p.compatibility?.classification;
       if (Object.prototype.hasOwnProperty.call(counts,c)) counts[c]++;
     });
-    return 'Live '+counts.live+' · Review '+counts.candidate+' · Next boot '+counts['next-boot']+
-      ' · Protected '+counts.protected;
+    return 'Live '+counts.live+' · Review '+counts.candidate+
+      ' · Unverified '+counts.unverified+' · Protected '+counts.protected+
+      (counts['needs-recovery'] ? ' · Recovery '+counts['needs-recovery'] : '');
   }
   function activeRowMap() {
     const rows = new Map();
@@ -942,7 +1456,107 @@ try {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url),1000);
   }
+  function toolDialog(title,description,entries,trigger,restore=false) {
+    closeModal();
+    const host = document.createElement('div');
+    host.id = 'ps-modal-host';
+    host.dataset.id = 'tools';
+    const shadow = host.attachShadow({mode:'open'});
+    const fields = entries.map(([key,value]) =>
+      '<div class="field"><dt>'+escapeHtml(key)+'</dt><dd>'+escapeHtml(value)+'</dd></div>'
+    ).join('');
+    shadow.innerHTML = '<style>'+modalCSS+'</style><div class="overlay">'+
+      '<section class="dialog" role="dialog" aria-modal="true" aria-labelledby="ps-modal-title">'+
+      '<header class="header"><div><div class="eyebrow">Plugin Switch · Diagnostics</div>'+
+      '<h2 id="ps-modal-title">'+escapeHtml(title)+'</h2></div>'+
+      '<button type="button" class="close" aria-label="Close dialog">×</button></header>'+
+      '<div class="scroll" tabindex="0"><p class="reason">'+escapeHtml(description)+'</p>'+
+      '<h3 class="section-title">Details</h3><dl>'+fields+'</dl></div>'+
+      '<footer class="footer">'+(restore ?
+      '<button type="button" class="done restore-action">Restore next boot</button>' : '')+
+      '<button type="button" class="done close-action">Close</button></footer>'+
+      '</section></div>';
+    document.body.appendChild(host);
+    originalBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    modalHost = host;
+    modalTrigger = trigger || null;
+    shadow.querySelector('.close').addEventListener('click',closeModal);
+    shadow.querySelector('.close-action').addEventListener('click',closeModal);
+    shadow.querySelector('.overlay').addEventListener('click',event => {
+      if (event.target.classList.contains('overlay')) closeModal();
+    });
+    shadow.querySelector('.restore-action')?.addEventListener('click',restoreNextBoot);
+    shadow.querySelector('.close').focus();
+  }
+
+  async function updateInfo(button) {
+    button.disabled = true;
+    try {
+      const r = await fetch(api+'?updates=1',{credentials:'same-origin',cache:'no-store'});
+      const info = await r.json();
+      if (!r.ok) throw new Error(info.error || 'Update check failed.');
+      toolDialog('Update channel',info.error || 'Update information from the installed branch.',[
+        ['Installed',info.installed_version || 'Unknown'],
+        ['Channel',info.branch || 'Unknown'],
+        ['Latest published',info.latest_version || 'Unavailable'],
+        ['Update available',info.available ? 'Yes — check for updates in Unraid' : 'No confirmed update'],
+        ['Last successful check',info.checked_at || 'Unavailable'],
+        ['Update source',info.update_url || 'Unknown']
+      ],button);
+    } catch(error) {
+      window.alert('Plugin Switch: '+error.message);
+    } finally { button.disabled = false; }
+  }
+
+  async function recoveryInfo(button) {
+    button.disabled = true;
+    try {
+      const r = await fetch(api+'?diagnostics=1',{credentials:'same-origin',cache:'no-store'});
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Cannot read recovery state.');
+      const pending = Object.entries(d.pending || {}).map(([id,value]) =>
+        id+' ('+(value.phase || 'unknown')+')');
+      const recent = (d.history || []).slice(-5).map(item =>
+        (item.id || 'plugin')+': '+(item.outcome || 'unknown'));
+      toolDialog('Plugin recovery',
+        'Emergency restore puts parked plugin manifests back into the next boot scan. '+
+        'It does not start or reinstall any plugin now. A reboot is needed; review dependencies first.',[
+        ['Interrupted operations',pending.length ? pending.join(', ') : 'None'],
+        ['Recent operations',recent.length ? recent.join(' · ') : 'None'],
+        ['Protection rules',d.protection_config || 'Unavailable']
+      ],button,true);
+    } catch(error) {
+      window.alert('Plugin Switch: '+error.message);
+    } finally { button.disabled = false; }
+  }
+
+  async function restoreNextBoot() {
+    if (!window.confirm('Prepare restoration of parked plugins for the NEXT reboot? '+
+      'This will not start services now.')) return;
+    const token = csrf();
+    if (!token) { window.alert('Unraid CSRF session unavailable. Refresh the page.'); return; }
+    const body = new URLSearchParams({
+      action:'recover',confirmation:'RESTORE',csrf_token:token
+    });
+    try {
+      const response = await fetch(api,{method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Recovery failed');
+      const result = data.result || {};
+      closeModal();
+      window.alert('Recovery prepared. Reboot required: '+(result.reboot_required ? 'Yes':'No')+
+        '. Review the Unraid syslog and plugin state before rebooting.');
+      await refresh(true);
+    } catch(error) {
+      window.alert('Plugin Switch: '+error.message);
+    }
+  }
+
   document.addEventListener('click',e => {
+    if (e.target.id === 'ps-updates') updateInfo(e.target);
+    if (e.target.id === 'ps-recovery') recoveryInfo(e.target);
     if (e.target.id === 'ps-rescan') {
       const button=e.target;
       if (!loading) {
@@ -968,7 +1582,7 @@ try {
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',init);
   else init();
 })();
-]]></INLINE><SHA256>76dee02bc14a296018c487f2a4485894dcd255ad6f3b1268c28a65fb5167899b</SHA256></FILE>
+]]></INLINE><SHA256>409cbb01180527405e1b7b55eec83de1d628e6b9285b5c3ff0ec2938007297ae</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/PluginSwitch_Loader.page"><INLINE><![CDATA[Menu="Buttons:105"
 Link="nav-user"
 ---
@@ -986,7 +1600,9 @@ Manage plugins from Unraid's existing **Plugins** tab with an Enabled toggle and
 **Update channel:** `dev`. Updates follow the same GitHub branch used for installation.
 
 **Detection:** Safe live controls require verified profiles or trusted local adapters. Potential services are marked for review. The Plugins tab offers manual rescans, per-plugin evidence and a local export.
-]]></INLINE><SHA256>83933d18fe600066a611de63174a4841f69af7f2a6ec653ee856e3ec3dda3e34</SHA256></FILE>
+
+**Recovery:** Pending operations are journaled; recovery can restore manifests for next boot without executing plugin scripts. Live controls remain restricted to verified adapters.
+]]></INLINE><SHA256>ecfaea87fb0904e704a05be39b8089a16553d62ba32789f5e1682c8be886f457</SHA256></FILE>
 <FILE Run="/bin/bash"><INLINE><![CDATA[
 set -eu
 mkdir -p /boot/config/plugins/plugin.switch/adapters

@@ -36,6 +36,14 @@ class RequestAndInterfaceTests(unittest.TestCase):
         self.assertNotIn('<summary>Why?</summary>', script)
         self.assertNotIn('ps-evidence-row', script)
 
+    def test_toolbar_actions_stay_right_aligned(self):
+        script = (ROOT / 'src/switch.js').read_text()
+        self.assertIn("bar.style.setProperty('justify-content','flex-end','important')", script)
+        self.assertIn("actions.style.setProperty('margin-left','auto','important')", script)
+        self.assertIn("actions.style.setProperty('justify-content','flex-end','important')", script)
+        self.assertIn("id=\"ps-rescan\"", script)
+        self.assertIn("id=\"ps-export\"", script)
+
     def test_toggle_group_uses_fixed_left_inset(self):
         script = (ROOT / 'src/switch.js').read_text()
         self.assertIn("cell.style.setProperty('position','relative','important')", script)

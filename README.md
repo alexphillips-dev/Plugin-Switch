@@ -1,4 +1,4 @@
-# Plugin Switch (development preview — 2026.10.29.8)
+# Plugin Switch (development preview — 2026.10.29.9)
 
 Adds an **Enabled** column to Unraid's existing **Plugins** tab. Designed for true **live** start/stop of plugins that expose a trustworthy runtime control adapter, rather than misleading everyone with a generic ON/OFF switch.
 
@@ -157,3 +157,17 @@ The toggle and adjacent lock/info icon are positioned together at the **true cen
 ## 2026.10.29.8 — Explicit left alignment
 
 The Enabled cell now places the **switch + lock/info icon 12px from the left side of the cell**, rather than centering it using a percentage-based absolute position. The isolated group is a fixed 68px wide, uses `justify-content:flex-start`, and remains vertically centered. This avoids inherited Unraid table padding and gives a visible leftward adjustment. The compatibility modal and control semantics are unchanged.
+
+## 2026.10.29.9 — Reliability and safety improvements
+
+- Persistent, atomic transaction journals for live toggles with best-effort synchronous rollback. Pending/incomplete operations lock further toggles until inspected.
+- **Recovery** action prepares disabled and interrupted manifests to load after a future reboot. It deliberately never runs unknown plugin installers or restarts services immediately.
+- Administrator-managed `safety.json` supports protected plugins and explicit known `depends_on` relationships. See `docs/SAFETY.md`. Dependencies are not guessed from process names.
+- Verified adapter runtime status probes run concurrently (maximum four, each independently timed out); discovery remains read-only with fingerprint caching.
+- User-facing compatibility label **Unverified** replaces the misleading Next boot count. Discovery of a service alone never unlocks live control.
+- **Check updates** reports installed version, published version, pinned dev/main branch, and last check result, with a remote URL allowlist and bounded timeout. Does not run on page load.
+- **Scan compatibility** and **Export report** are grouped on the far right of the toolbar, with CSS `!important` inline overrides for Unraid themes.
+- `tools/profile_review.py` prepares candidate hashes for reviewed adapters but never adds unvalidated profiles automatically.
+- CI tests expanded to cover recovery, interruption, dependencies, status probes, version parsing, packaging and toolbar placement.
+
+**Important:** The real third-party compatibility registry remains empty until plugins are individually audited and exercised on a disposable Unraid installation. This prevents unsafe claims about arbitrary live plug-in control.

@@ -90,12 +90,13 @@
     return document.querySelector('input[name="csrf_token"]')?.value || '';
   }
   function compatibilityStatus(p) {
+    if (p.support === 'interrupted' || p.compatibility?.classification === 'needs-recovery') return 'Recovery required';
     if (p.support === 'protected' || p.compatibility?.classification === 'protected') return 'Protected';
     if (p.supported) return p.enabled ? 'Live control available' : 'Restore available';
     if (p.compatibility?.classification === 'candidate') return 'Needs review';
     if (p.support === 'invalid-adapter') return 'Adapter blocked';
     if (p.support === 'status-error') return 'Adapter error';
-    return 'No live control';
+    return 'No verified live control';
   }
   function explanation(p) {
     return (p.enabled ? 'Installed' : 'Parked')+' · '+compatibilityStatus(p)+'. '+
@@ -243,19 +244,47 @@
     if (document.getElementById('ps-toolbar')) return;
     const bar = document.createElement('div');
     bar.id = 'ps-toolbar';
+    // Unraid's theme floats default buttons left. Force toolbar and group
+    // alignment independently of all table and global button styles.
+    bar.style.setProperty('display','flex','important');
+    bar.style.setProperty('align-items','center','important');
+    bar.style.setProperty('justify-content','flex-end','important');
+    bar.style.setProperty('width','100%','important');
+    bar.style.setProperty('gap','12px','important');
+    bar.style.setProperty('flex-wrap','wrap','important');
+    bar.style.setProperty('margin','8px 0','important');
     bar.innerHTML = '<span id="ps-summary" aria-live="polite"></span>'+
+      '<div id="ps-toolbar-actions">'+
+      '<button type="button" id="ps-updates">Check updates</button>'+
+      '<button type="button" id="ps-recovery">Recovery</button>'+
       '<button type="button" id="ps-rescan" title="Refresh read-only compatibility discovery">Scan compatibility</button>'+
-      '<button type="button" id="ps-export" title="Download compatibility evidence locally">Export report</button>';
+      '<button type="button" id="ps-export" title="Download compatibility evidence locally">Export report</button>'+
+      '</div>';
+    const summary = bar.querySelector('#ps-summary');
+    summary.style.setProperty('margin-right','auto','important');
+    summary.style.setProperty('flex','1 0 auto','important');
+    const actions = bar.querySelector('#ps-toolbar-actions');
+    actions.style.setProperty('display','flex','important');
+    actions.style.setProperty('align-items','center','important');
+    actions.style.setProperty('justify-content','flex-end','important');
+    actions.style.setProperty('gap','8px','important');
+    actions.style.setProperty('margin-left','auto','important');
+    actions.style.setProperty('flex-wrap','wrap','important');
+    for (const button of actions.querySelectorAll('button')) {
+      button.style.setProperty('float','none','important');
+      button.style.setProperty('margin','0','important');
+    }
     t.parentNode.insertBefore(bar,t);
   }
   function summary() {
-    const counts = {live:0,candidate:0,'next-boot':0,protected:0};
+    const counts = {live:0,candidate:0,unverified:0,protected:0,'needs-recovery':0};
     plugins.forEach(p => {
       const c = p.compatibility?.classification;
       if (Object.prototype.hasOwnProperty.call(counts,c)) counts[c]++;
     });
-    return 'Live '+counts.live+' · Review '+counts.candidate+' · Next boot '+counts['next-boot']+
-      ' · Protected '+counts.protected;
+    return 'Live '+counts.live+' · Review '+counts.candidate+
+      ' · Unverified '+counts.unverified+' · Protected '+counts.protected+
+      (counts['needs-recovery'] ? ' · Recovery '+counts['needs-recovery'] : '');
   }
   function activeRowMap() {
     const rows = new Map();
@@ -382,7 +411,107 @@
     a.click();
     setTimeout(() => URL.revokeObjectURL(url),1000);
   }
+  function toolDialog(title,description,entries,trigger,restore=false) {
+    closeModal();
+    const host = document.createElement('div');
+    host.id = 'ps-modal-host';
+    host.dataset.id = 'tools';
+    const shadow = host.attachShadow({mode:'open'});
+    const fields = entries.map(([key,value]) =>
+      '<div class="field"><dt>'+escapeHtml(key)+'</dt><dd>'+escapeHtml(value)+'</dd></div>'
+    ).join('');
+    shadow.innerHTML = '<style>'+modalCSS+'</style><div class="overlay">'+
+      '<section class="dialog" role="dialog" aria-modal="true" aria-labelledby="ps-modal-title">'+
+      '<header class="header"><div><div class="eyebrow">Plugin Switch · Diagnostics</div>'+
+      '<h2 id="ps-modal-title">'+escapeHtml(title)+'</h2></div>'+
+      '<button type="button" class="close" aria-label="Close dialog">×</button></header>'+
+      '<div class="scroll" tabindex="0"><p class="reason">'+escapeHtml(description)+'</p>'+
+      '<h3 class="section-title">Details</h3><dl>'+fields+'</dl></div>'+
+      '<footer class="footer">'+(restore ?
+      '<button type="button" class="done restore-action">Restore next boot</button>' : '')+
+      '<button type="button" class="done close-action">Close</button></footer>'+
+      '</section></div>';
+    document.body.appendChild(host);
+    originalBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    modalHost = host;
+    modalTrigger = trigger || null;
+    shadow.querySelector('.close').addEventListener('click',closeModal);
+    shadow.querySelector('.close-action').addEventListener('click',closeModal);
+    shadow.querySelector('.overlay').addEventListener('click',event => {
+      if (event.target.classList.contains('overlay')) closeModal();
+    });
+    shadow.querySelector('.restore-action')?.addEventListener('click',restoreNextBoot);
+    shadow.querySelector('.close').focus();
+  }
+
+  async function updateInfo(button) {
+    button.disabled = true;
+    try {
+      const r = await fetch(api+'?updates=1',{credentials:'same-origin',cache:'no-store'});
+      const info = await r.json();
+      if (!r.ok) throw new Error(info.error || 'Update check failed.');
+      toolDialog('Update channel',info.error || 'Update information from the installed branch.',[
+        ['Installed',info.installed_version || 'Unknown'],
+        ['Channel',info.branch || 'Unknown'],
+        ['Latest published',info.latest_version || 'Unavailable'],
+        ['Update available',info.available ? 'Yes — check for updates in Unraid' : 'No confirmed update'],
+        ['Last successful check',info.checked_at || 'Unavailable'],
+        ['Update source',info.update_url || 'Unknown']
+      ],button);
+    } catch(error) {
+      window.alert('Plugin Switch: '+error.message);
+    } finally { button.disabled = false; }
+  }
+
+  async function recoveryInfo(button) {
+    button.disabled = true;
+    try {
+      const r = await fetch(api+'?diagnostics=1',{credentials:'same-origin',cache:'no-store'});
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Cannot read recovery state.');
+      const pending = Object.entries(d.pending || {}).map(([id,value]) =>
+        id+' ('+(value.phase || 'unknown')+')');
+      const recent = (d.history || []).slice(-5).map(item =>
+        (item.id || 'plugin')+': '+(item.outcome || 'unknown'));
+      toolDialog('Plugin recovery',
+        'Emergency restore puts parked plugin manifests back into the next boot scan. '+
+        'It does not start or reinstall any plugin now. A reboot is needed; review dependencies first.',[
+        ['Interrupted operations',pending.length ? pending.join(', ') : 'None'],
+        ['Recent operations',recent.length ? recent.join(' · ') : 'None'],
+        ['Protection rules',d.protection_config || 'Unavailable']
+      ],button,true);
+    } catch(error) {
+      window.alert('Plugin Switch: '+error.message);
+    } finally { button.disabled = false; }
+  }
+
+  async function restoreNextBoot() {
+    if (!window.confirm('Prepare restoration of parked plugins for the NEXT reboot? '+
+      'This will not start services now.')) return;
+    const token = csrf();
+    if (!token) { window.alert('Unraid CSRF session unavailable. Refresh the page.'); return; }
+    const body = new URLSearchParams({
+      action:'recover',confirmation:'RESTORE',csrf_token:token
+    });
+    try {
+      const response = await fetch(api,{method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Recovery failed');
+      const result = data.result || {};
+      closeModal();
+      window.alert('Recovery prepared. Reboot required: '+(result.reboot_required ? 'Yes':'No')+
+        '. Review the Unraid syslog and plugin state before rebooting.');
+      await refresh(true);
+    } catch(error) {
+      window.alert('Plugin Switch: '+error.message);
+    }
+  }
+
   document.addEventListener('click',e => {
+    if (e.target.id === 'ps-updates') updateInfo(e.target);
+    if (e.target.id === 'ps-recovery') recoveryInfo(e.target);
     if (e.target.id === 'ps-rescan') {
       const button=e.target;
       if (!loading) {

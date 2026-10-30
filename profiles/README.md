@@ -36,3 +36,5 @@ The scanner extracts service references and hazard signals as *review hints*. It
   "adapter_sha256": "64 lowercase hex characters"
 }
 ```
+
+Run `python3 tools/profile_review.py /path/to/plugin.plg --adapter /path/to/reviewed.sh` to emit a **review-only** fingerprint report. Publishing an adapter still requires independent source review, rollback testing, and matching checksums.

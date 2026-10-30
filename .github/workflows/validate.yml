@@ -18,12 +18,17 @@ jobs:
         run: |
           php -l src/Controller.php
           php -l src/api.php
+          php -l src/Safety.php
+          php -l src/ProbePool.php
+          php -l src/Release.php
       - name: Validate JavaScript
         run: node --check src/switch.js
       - name: Test controller behavior
         run: php tests/controller_test.php
       - name: Verify capability discovery and audited profile lifecycle
         run: sudo php tests/compatibility_test.php
+      - name: Validate recovery, dependency and release diagnostics
+        run: php tests/safety_test.php
       - name: Validate generated manifest
         run: |
           python3 tools/build.py --check

@@ -17,7 +17,7 @@ class BuildTests(unittest.TestCase):
     def test_valid_xml(self):
         root = ET.fromstring(build.build())
         self.assertEqual(root.tag, 'PLUGIN')
-        self.assertEqual(len(root.findall('FILE')), 9)
+        self.assertEqual(len(root.findall('FILE')), 12)
     def test_inline_file_checksums_for_unraid_updates(self):
         root = ET.fromstring(build.build("dev"))
         named = [entry for entry in root.findall("FILE") if entry.attrib.get("Name")]
@@ -34,7 +34,7 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(declared, expected)
 
     def test_unraid_version_policy(self):
-        self.assertEqual(build.VERSION, "2026.10.29.8")
+        self.assertEqual(build.VERSION, "2026.10.29.9")
         build.validate_version(build.VERSION)
         self.assertIn(f'<!ENTITY version "{build.VERSION}">', build.build())
         for invalid in ("2026.10.29-dev1", "2026.13.29.1", "2026.02.30.1",

@@ -85,8 +85,8 @@ final class PluginSwitchCompatibility
     public function scan(string $id, string $manifest, bool $force = false): array
     {
         $result = [
-            'classification' => self::protectedId($id) ? 'protected' : 'next-boot',
-            'reason' => 'No audited, reversible live-control method has been verified.',
+            'classification' => self::protectedId($id) ? 'protected' : 'unverified',
+            'reason' => 'No audited, reversible live-control method has been verified; no live-control action is available.',
             'services' => [],
             'signals' => [],
             'profile' => null,

@@ -4,6 +4,7 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 require_once __DIR__ . '/Controller.php';
+require_once __DIR__ . '/Release.php';
 function respond(int $status, array $payload): never {
     http_response_code($status);
     echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
@@ -14,6 +15,12 @@ try {
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         // Compatibility scanning only reads plugin definitions and refreshes
         // our private /run cache. Use GET for this non-mutating operation.
+        if (($_GET['diagnostics'] ?? '') === '1') {
+            respond(200, $manager->diagnostics());
+        }
+        if (($_GET['updates'] ?? '') === '1') {
+            respond(200, (new PluginSwitchRelease())->check(($_GET['force'] ?? '') === '1'));
+        }
         $force = ($_GET['rescan'] ?? '') === '1';
         respond(200, ['plugins' => $manager->all($force)]);
     }
@@ -23,6 +30,12 @@ try {
     // Validating it a second time here always fails for legitimate requests.
     // Never expose this endpoint outside Unraid's authenticated WebGUI.
     $action = $_POST['action'] ?? 'toggle';
+    if ($action === 'recover') {
+        if (($_POST['confirmation'] ?? '') !== 'RESTORE') {
+            respond(400, ['error'=>'Explicit recovery confirmation required.']);
+        }
+        respond(200, ['result'=>$manager->recoverNextBoot()]);
+    }
     if ($action !== 'toggle') respond(400, ['error' => 'Unknown operation']);
     $id = $_POST['id'] ?? null;
     $target = $_POST['enabled'] ?? null;

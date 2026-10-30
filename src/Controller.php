@@ -267,6 +267,10 @@ final class PluginSwitchController
             if ($script === null) {
                 throw new RuntimeException($adapterReason);
             }
+            // Snapshot the actual runtime state before attempting a change,
+            // so failure handling does not accidentally start an already
+            // stopped service.
+            $originalRuntime = $enable ? null : $this->state($script);
             $this->safety->begin($id, $enable ? 'enable' : 'disable');
             try {
             if ($enable) {
@@ -322,7 +326,7 @@ final class PluginSwitchController
                 if (!is_dir($this->park) && !mkdir($this->park, 0700, true) && !is_dir($this->park)) {
                     throw new RuntimeException('Cannot create disabled-plugin directory.');
                 }
-                if ($this->state($script) !== 'disabled') {
+                if ($originalRuntime !== 'disabled') {
                     $this->action($script, 'stop');
                 }
                 $this->safety->phase($id, 'runtime-stopped');
@@ -356,17 +360,23 @@ final class PluginSwitchController
                     if (!$enable && is_file($active) && !is_link($link)) {
                         if (!@symlink($active, $link)) throw new RuntimeException('Registration rollback failed.');
                     }
-                    if (!$enable && $this->state($script) !== 'enabled') {
+                    if (!$enable && $originalRuntime === 'enabled' && $this->state($script) !== 'enabled') {
                         $this->action($script, 'start');
+                    }
+                    if (!$enable && $originalRuntime === 'disabled' && $this->state($script) !== 'disabled') {
+                        $this->action($script, 'stop');
                     }
                     // Enabling a plugin after reboot may partially install it.
                     // Leave this transaction pending for explicit recovery.
                     if ($enable && !is_file($disabled)) {
                         throw new RuntimeException('Enable interrupted; intervention required.');
                     }
-                    if ($enable && !is_file($active)) {
-                        // The original parked manifest remains intact.
-                        $this->safety->end($id, 'failed-no-change');
+                    if ($enable && !is_file($active) && !is_link($link)) {
+                        // A failed start may have partially started services.
+                        // Verify stopped before claiming the original parked state.
+                        if ($this->state($script) === 'disabled') {
+                            $this->safety->end($id, 'failed-no-change');
+                        }
                     } elseif (!$enable && is_file($active) && is_link($link)) {
                         $this->safety->end($id, 'rolled-back');
                     }

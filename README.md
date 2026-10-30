@@ -1,4 +1,4 @@
-# Plugin Switch (development preview — 2026.10.29.9)
+# Plugin Switch (development preview — 2026.10.29.10)
 
 Adds an **Enabled** column to Unraid's existing **Plugins** tab. Designed for true **live** start/stop of plugins that expose a trustworthy runtime control adapter, rather than misleading everyone with a generic ON/OFF switch.
 
@@ -171,3 +171,7 @@ The Enabled cell now places the **switch + lock/info icon 12px from the left sid
 - CI tests expanded to cover recovery, interruption, dependencies, status probes, version parsing, packaging and toolbar placement.
 
 **Important:** The real third-party compatibility registry remains empty until plugins are individually audited and exercised on a disposable Unraid installation. This prevents unsafe claims about arbitrary live plug-in control.
+
+## 2026.10.29.10 — Runtime rollback correction
+
+When an attempted disable is rejected or fails, the rollback now restores the **actual pre-operation runtime status**. In particular, a plugin that was installed but already stopped stays stopped; it is not accidentally started. A partially failed enable only clears the journal after confirming the plugin remains stopped and parked. A new integration regression test covers this failure mode.

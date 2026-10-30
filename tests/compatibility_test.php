@@ -104,4 +104,20 @@ check($scan['profile_status'] === 'manifest-mismatch', 'version drift invalidate
 check($scanner->verifiedAdapter('integration-test.plg', $plugin) === null, 'no adapter on drift');
 check($controller->all(true)[0]['supported'] === false, 'drift locks live control');
 
+// Regression: a previously stopped service must NOT be unexpectedly started
+// when a disable attempt is rejected because of conflicting manifests.
+file_put_contents($plugin, $manifest);
+@unlink($state);
+$conflict = "$boot/plugin.switch/disabled/integration-test.plg";
+file_put_contents($conflict, $manifest);
+try {
+    $controller->change('integration-test.plg', false);
+    throw new RuntimeException('Conflicted disable unexpectedly succeeded');
+} catch (RuntimeException $e) {
+    check(str_contains($e->getMessage(), 'parked file conflicts'), 'conflict rejected');
+}
+check(!is_file($state), 'rollback preserves original stopped runtime');
+check(is_file($plugin) && is_link("$registered/integration-test.plg"), 'manifest and link remain installed');
+@unlink($conflict);
+
 echo "Capability discovery, hash-pinned profiles, lifecycle and fail-closed drift passed\n";

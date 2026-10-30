@@ -1,0 +1,70 @@
+name: Build development package
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'tools/build.py'
+      - 'tests/test_build.py'
+      - 'tests/safety_test.php'
+      - 'docs/releases/**'
+      - 'CHANGELOG.md'
+      - '.github/workflows/build-dev.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plugin-switch-dev-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Install PHP dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y php-cli php-xml
+      - name: Build pinned archive and PLG
+        run: |
+          python3 tools/build.py --branch dev
+          python3 tools/build.py --branch dev --check
+      - name: Run packaging and runtime tests
+        env:
+          PLUGIN_SWITCH_BRANCH: dev
+        run: |
+          python3 -m unittest discover -s tests -v
+          php -l src/api.php
+          php -l src/Controller.php
+          php -l src/Compatibility.php
+          php -l src/Release.php
+          node --check src/switch.js
+          php tests/controller_test.php
+          sudo php tests/compatibility_test.php
+          php tests/safety_test.php
+      - name: Publish immutable package and manifest to dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^VERSION = "\([^"]*\)"/\1/p' tools/build.py)"
+          test -n "$version"
+          package="archive/plugin.switch-${version}.txz"
+          test -s "$package"
+          test -s "${package}.sha256"
+          test -s plugin.switch.plg
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$package" "${package}.sha256" plugin.switch.plg
+          if git diff --cached --quiet; then
+            echo "Current development package is already published."
+            exit 0
+          fi
+          git commit -m "build: publish Plugin Switch ${version} dev package"
+          git push origin HEAD:dev
+          echo "Published ${package} and branch-pinned plugin.switch.plg"

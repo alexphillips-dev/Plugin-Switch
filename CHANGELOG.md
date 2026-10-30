@@ -2,19 +2,17 @@
 
 All user-visible changes to Plugin Switch are recorded here, newest first. This is the canonical release history; the [README](README.md) is a short project overview and the [Wiki](https://github.com/alexphillips-dev/Plugin-Switch/wiki) explains the current behavior rather than duplicating release notes.
 
-Versions use `YYYY.MM.DD.patch`. **Important:** Unraid's third-party plugin update manager compares versions using PHP `strcmp()` (lexicographic ordering), *not* numeric semantic-version ordering. The `2026.10.29.90` bridge release intentionally sorts above both older `2026.10.29.9` and `2026.10.29.10` and resolves previously invisible updates. See [Updates & Release Channels](https://github.com/alexphillips-dev/Plugin-Switch/wiki/Updates-and-Release-Channels).
+Releases use `YYYY.MM.DD.PP` and **zero-pad** the patch from the start of each release date, as FolderView Plus does. The package manifest pins the update channel and a versioned, checksummed archive. Some older development builds that used unpadded patches may require a one-time manual refresh; consult the [Update Guide](https://github.com/alexphillips-dev/Plugin-Switch/wiki/Updates-and-Release-Channels).
 
-## [2026.10.29.90] - 2026-10-29
+## [2026.10.29.11] - 2026-10-29
 ### Fixed
-- Resolved Unraid's invisible-update issue when advancing from patch `.9` to `.10`; the new bridge patch `.90` sorts newer using Unraid's actual string comparison.
-- Added release-time validation to reject versions that would sort older than any previous published patch for the current day.
-- Aligned Plugin Switch's optional update diagnostic with Unraid's native lexicographic comparison so it cannot contradict the Plugins tab.
-### Documentation
-- Reduced the repository README to purpose, support limitations, installation, and concise links.
-- Moved historical changes to this changelog; kept the Wiki for current functionality and detailed technical guidance.
-- Documented the transition to fixed-width patch numbers on subsequent release dates, and provided update troubleshooting commands.
-### Compatibility
-- Kept the development install/update URL pinned to `dev`; did not publish a stable `main` release.
+- Removed the temporary .90 release from the active development update channel and resumed the sequential patch format.
+- Switched release delivery to a versioned, SHA-256/MD5-verified .txz package and branch-pinned .plg manifest, following FolderView Plus.
+- Added a user-initiated, cache-busted force-refresh helper for installations whose prior manifest or legacy patch ordering prevents Unraid's native update detection.
+- Kept the Plugin Switch diagnostic update check aligned with FolderView Plus: numeric version comparison, network response details, and a separate indicator for Unraid's native update visibility.
+### Development
+- Added reproducible package generation and a package integrity/update-channel test suite.
+- Added per-release notes in docs/releases and retained CHANGELOG.md as the canonical cumulative history.
 
 ## [2026.10.29.10] - 2026-10-29
 ### Fixed

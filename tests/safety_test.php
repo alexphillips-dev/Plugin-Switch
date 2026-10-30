@@ -55,19 +55,21 @@ assertSafety(is_file("$boot/another.plg"), 'boot manifest present');
 assertSafety(PluginSwitchRelease::versionOf(
     '<!ENTITY version "2026.10.29.9">') === '2026.10.29.9', 'version extraction');
 assertSafety(PluginSwitchRelease::versionOf('<PLUGIN/>')===null, 'invalid version is null');
-assertSafety(PluginSwitchRelease::isNewer('2026.10.29.10', '2026.10.29.9') === false,
-    'native Unraid ordering rejects legacy .10 after .9');
-assertSafety(PluginSwitchRelease::isNewer('2026.10.29.90', '2026.10.29.9') === true,
-    'bridge release newer than .9');
-assertSafety(PluginSwitchRelease::isNewer('2026.10.29.90', '2026.10.29.10') === true,
-    'bridge release newer than .10');
-assertSafety(PluginSwitchRelease::isNewer('2026.10.30.01', '2026.10.29.90') === true,
-    'future-date zero padded version is newer');
+assertSafety(PluginSwitchRelease::isNewer('2026.10.29.10', '2026.10.29.9') === true,
+    'FolderView Plus-style diagnostic uses numeric version comparison');
+assertSafety(PluginSwitchRelease::nativeUpdateVisible('2026.10.29.10', '2026.10.29.9') === false,
+    'Unraid may hide legacy .9 -> .10 update with strcmp');
+assertSafety(PluginSwitchRelease::isNewer('2026.10.29.11', '2026.10.29.10') === true,
+    'sequential .11 newer than .10');
+assertSafety(PluginSwitchRelease::nativeUpdateVisible('2026.10.29.11', '2026.10.29.10') === true,
+    'Unraid detects .11 after .10');
+assertSafety(PluginSwitchRelease::isNewer('2026.10.30.01', '2026.10.29.11') === true,
+    'new-day padded version is newer');
 assertSafety(PluginSwitchRelease::isNewer(null, '2026.10.29.10') === false,
     'missing remote version is never newer');
 
 $adapter = "$root/status.sh";
-file_put_contents($adapter, "#!/bin/bash\necho enabled\n");
+file_put_contents($adapter, "#!/bin/bash\\necho enabled\\n");
 chmod($adapter,0700);
 $probe = PluginSwitchProbePool::check(['test.plg'=>$adapter], 2);
 assertSafety(($probe['test.plg']['state'] ?? '') === 'enabled', 'parallel status probe');

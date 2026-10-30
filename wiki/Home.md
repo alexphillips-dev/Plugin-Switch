@@ -2,7 +2,7 @@
 
 **A native Unraid Plugins-tab extension for inspecting plugin compatibility and controlling eligible plugins without uninstalling them.**
 
-> **Development preview — current documented build: `2026.10.29.90` (`dev` branch).** Plugin Switch has not been validated across the full Unraid plugin ecosystem. Use a test server, keep a flash backup, and read [Safety & Recovery](Safety-and-Recovery) before testing live controls.
+> **Development preview — current documented build: `2026.10.29.11` (`dev` branch).** Plugin Switch has not been validated across the full Unraid plugin ecosystem. Use a test server, keep a flash backup, and read [Safety & Recovery](Safety-and-Recovery) before testing live controls.
 
 Plugin Switch adds an **Enabled** column to **Unraid → Plugins**, a compact lock/info button for compatibility details, and tools to scan compatibility, export a local report, inspect update channels, and prepare recovery.
 

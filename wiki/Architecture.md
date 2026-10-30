@@ -2,12 +2,13 @@
 
 [Home](Home) · [How It Works](How-It-Works) · [Security Model](Security-Model)
 
-This is an implementation-oriented guide for the current **`dev` build `2026.10.29.90`**. It documents the code as shipped; it is not a stable external API commitment.
+This is an implementation-oriented guide for the current **`dev` build `2026.10.29.11`**. It documents the code as shipped; it is not a stable external API commitment.
 
 ## Components
 
 ```text
-plugin.switch.plg              Unraid installer, version, branch URL and inline SHA256 payloads
+plugin.switch.plg              Branch-pinned installer, archive URL and integrity digests
+archive/plugin.switch-VERSION.txz  Versioned, checksum-verified runtime package
 └─ /usr/local/emhttp/plugins/plugin.switch/
    ├─ PluginSwitch_Loader.page   Loads the UI on Unraid navigation pages
    ├─ switch.js                  Plugins-table integration, Shadow DOM, modal and controls
@@ -79,6 +80,6 @@ The real response may include additional fields. Do not make external automation
 
 ## Packaging and release checks
 
-`tools/build.py --branch dev` embeds PHP/JS/README files into a single XML `.plg`, with a SHA-256 for each embedded runtime file. The version follows `YYYY.MM.DD.patch`, and the `pluginURL` is pinned to the selected branch. GitHub Actions lint PHP and JavaScript, check the generated manifest and run simulated safety/compatibility tests. Passing CI does **not** constitute full real-Unraid lifecycle certification.
+`tools/build.py --branch dev` builds deterministic `.txz` content from PHP/JS/README sources and a branch-pinned `.plg` with MD5/SHA-256 package checksums. The version uses `YYYY.MM.DD.PP` and URLs pin to the intended branch. GitHub Actions validate and publish versioned artifacts after packaging and simulated safety tests. Passing CI does **not** constitute real-Unraid lifecycle certification.
 
 See [Contributing](Contributing) for development and review requirements.

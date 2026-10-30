@@ -411,7 +411,7 @@
     a.click();
     setTimeout(() => URL.revokeObjectURL(url),1000);
   }
-  function toolDialog(title,description,entries,trigger,restore=false) {
+  function toolDialog(title,description,entries,trigger,restore=false,refreshScript=null) {
     closeModal();
     const host = document.createElement('div');
     host.id = 'ps-modal-host';
@@ -429,6 +429,7 @@
       '<h3 class="section-title">Details</h3><dl>'+fields+'</dl></div>'+
       '<footer class="footer">'+(restore ?
       '<button type="button" class="done restore-action">Restore next boot</button>' : '')+
+      (refreshScript ? '<button type="button" class="done refresh-copy">Copy refresh commands</button>' : '')+
       '<button type="button" class="done close-action">Close</button></footer>'+
       '</section></div>';
     document.body.appendChild(host);
@@ -442,23 +443,40 @@
       if (event.target.classList.contains('overlay')) closeModal();
     });
     shadow.querySelector('.restore-action')?.addEventListener('click',restoreNextBoot);
+    shadow.querySelector('.refresh-copy')?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(refreshScript);
+        window.alert('Plugin Switch: recovery commands copied. Review before running in the Unraid terminal.');
+      } catch (_) {
+        window.prompt('Copy these commands for the Unraid terminal:',refreshScript);
+      }
+    });
     shadow.querySelector('.close').focus();
   }
 
   async function updateInfo(button) {
     button.disabled = true;
     try {
-      const r = await fetch(api+'?updates=1',{credentials:'same-origin',cache:'no-store'});
+      const r = await fetch(api+'?updates=1&force=1',{credentials:'same-origin',cache:'no-store'});
       const info = await r.json();
       if (!r.ok) throw new Error(info.error || 'Update check failed.');
-      toolDialog('Update channel',info.error || 'Update information from the installed branch.',[
+      const supportedUrl = /^https:\/\/raw\.githubusercontent\.com\/alexphillips-dev\/Plugin-Switch\/(dev|main)\/plugin\.switch\.plg$/.test(info.update_url || '');
+      const script = supportedUrl ?
+        'wget -O /tmp/plugin.switch.plg "'+info.update_url+'?_=$(date +%s)"\n'+
+        'plugin install /tmp/plugin.switch.plg forced\n'+
+        'head -n 8 /boot/config/plugins/plugin.switch.plg' : null;
+      toolDialog('Update channel',
+        (info.error || 'Update diagnostics follow the installed branch. Native Unraid update checks use string ordering; if they miss a release, the manual helper can refresh an existing installation.'),[
         ['Installed',info.installed_version || 'Unknown'],
         ['Channel',info.branch || 'Unknown'],
         ['Latest published',info.latest_version || 'Unavailable'],
-        ['Update available',info.available ? 'Yes — check for updates in Unraid' : 'No confirmed update'],
-        ['Last successful check',info.checked_at || 'Unavailable'],
-        ['Update source',info.update_url || 'Unknown']
-      ],button);
+        ['Published newer',info.available ? 'Yes' : 'Not confirmed'],
+        ['Visible to Unraid',info.native_available ? 'Yes' : 'Not detected by string ordering'],
+        ['Checked at',info.checked_at || 'Unavailable'],
+        ['Remote HTTP status',String(info.http_status ?? 'Unknown')],
+        ['Request duration',info.duration_ms == null ? 'Unknown' : info.duration_ms+' ms'],
+        ['Manifest URL',info.update_url || 'Unknown']
+      ],button,false,script);
     } catch(error) {
       window.alert('Plugin Switch: '+error.message);
     } finally { button.disabled = false; }

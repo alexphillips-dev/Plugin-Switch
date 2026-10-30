@@ -29,7 +29,10 @@ jobs:
         run: sudo php tests/compatibility_test.php
       - name: Validate recovery, dependency and release diagnostics
         run: php tests/safety_test.php
-      - name: Validate generated manifest
+      - name: Validate versioned package, release manifest and tests
         run: |
-          python3 tools/build.py --check
+          # The dev release workflow commits generated binary artifacts after
+          # this source commit. Verify reproducibility independently here.
+          python3 tools/build.py --branch "${PLUGIN_SWITCH_BRANCH}"
+          python3 tools/build.py --branch "${PLUGIN_SWITCH_BRANCH}" --check
           python3 -m unittest discover -s tests -v

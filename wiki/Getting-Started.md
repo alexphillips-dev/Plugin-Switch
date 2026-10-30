@@ -32,7 +32,7 @@ head -n 8 /tmp/plugin.switch.plg
 plugin install /tmp/plugin.switch.plg
 ```
 
-The downloaded file should begin with `<?xml` and contain a `PLUGIN` manifest. Observe the installer output for errors; do not treat a downloaded file as proof of successful installation.
+The downloaded file should begin with `<?xml` and contain a `PLUGIN` manifest referencing a versioned, checksummed `.txz` package. The installer downloads and installs that archive. Observe the installer output for errors; do not treat a downloaded file as proof of successful installation.
 
 ## Verify the installation
 
@@ -52,7 +52,7 @@ The **Enabled** switch shows Unraid registration/boot intent. It is not an all-p
 
 For an installation sourced from `dev`, the manifest's `pluginURL` points back to `dev`. Use Unraid's **Check For Updates** or Plugin Switch's **Check updates** diagnostics. The latter reports information but does not install releases.
 
-If Unraid does not detect an update, read [Updates & Release Channels](Updates-and-Release-Channels) and [Troubleshooting](Troubleshooting). Reinstalling with `plugin install` may be rejected when it considers the installed version current; do not delete persistent plugin settings just to force a refresh.
+If Unraid does not detect an update, inspect [Updates & Release Channels](Updates-and-Release-Channels), then use **Check updates → Copy refresh commands**. This copies a cache-busted manifest download plus `plugin install /tmp/plugin.switch.plg forced` for a deliberate one-time refresh. Check that the downloaded manifest points to the intended branch before running it; do not delete persistent plugin settings to force a refresh.
 
 ## Uninstall carefully
 

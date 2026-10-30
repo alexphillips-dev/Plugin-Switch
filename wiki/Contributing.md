@@ -6,7 +6,7 @@ Contributions are welcome, particularly **reproducible bug reports, test fixture
 
 ## Development branch and versioning
 
-The active work is on [`dev`](https://github.com/alexphillips-dev/Plugin-Switch/tree/dev). The production-oriented `main` channel may not yet have a published plugin manifest. Release versions follow **`YYYY.MM.DD.patch`**; a code change that publishes a new `.plg` must bump the version and rebuild the package for the intended branch.
+The active work is on [`dev`](https://github.com/alexphillips-dev/Plugin-Switch/tree/dev). A stable `main` release has not yet been published. Release versions follow **`YYYY.MM.DD.PP`** (patches are zero-padded from `.01` onward). A runtime change requires a new versioned `.txz` archive, checksum, branch-specific `.plg`, and concise notes in `docs/releases/`; `CHANGELOG.md` is the authoritative cumulative history.
 
 ## Local development and checks
 
@@ -58,7 +58,7 @@ Open an [issue](https://github.com/alexphillips-dev/Plugin-Switch/issues) with v
 - Confirm all code changes are inspected together with their cross-component effects (PHP backend, JS UI, builder, profiles and tests).
 - Bump `VERSION` in `tools/build.py` using the required date-based scheme.
 - Rebuild and validate `plugin.switch.plg` with the correct branch URL.
-- Verify SHA-256 digests match the packaged inline payloads.
+- Verify the generated `.txz` archive, `.sha256` digest, and branch-pinned `.plg` agree. The Build development package workflow publishes both artifacts only after tests pass.
 - Run lint, tests and simulated recovery scenarios.
 - Confirm compatibility classifications remain fail-closed for unknown plugins.
 - Inspect workflow results and verify the published raw `.plg` contains the intended version and update URL.

@@ -22,11 +22,15 @@ final class PluginSwitchRelease
         return null;
     }
 
-    /**
-     * Match the native Unraid third-party plugin manager exactly.
-     * PHP version_compare() is NOT used there; strcmp() is.
-     */
+    /** FolderView Plus-style diagnostic: numeric version comparison. */
     public static function isNewer(?string $published, ?string $installed): bool
+    {
+        return $published !== null && $installed !== null &&
+            version_compare($published, $installed, '>');
+    }
+
+    /** Unraid's own third-party Plugins list uses strcmp, which can differ. */
+    public static function nativeUpdateVisible(?string $published, ?string $installed): bool
     {
         return $published !== null && $installed !== null &&
             strcmp($published, $installed) > 0;
@@ -59,12 +63,22 @@ final class PluginSwitchRelease
             $data = json_decode((string)@file_get_contents($this->cache), true);
             if (is_array($data) && ($data['update_url'] ?? null) === $local['update_url']) return $data;
         }
-        $result = $local + ['latest_version'=>null, 'available'=>false, 'checked_at'=>gmdate('c')];
+        $result = $local + [
+            'latest_version'=>null, 'available'=>false,
+            'native_available'=>false, 'manual_refresh_recommended'=>false,
+            'checked_at'=>gmdate('c'), 'request_url'=>null,
+            'http_status'=>null, 'duration_ms'=>null
+        ];
         if (!function_exists('curl_init')) {
             $result['error'] = 'PHP curl extension is unavailable.';
             return $result;
         }
-        $ch = curl_init($local['update_url']);
+        // FolderView Plus uses a fresh request URL to bypass stale CDN/proxy
+        // results; preserve the installed branch and never chase redirects.
+        $requestUrl = $local['update_url'] . '?_=' . time();
+        $result['request_url'] = $requestUrl;
+        $started = microtime(true);
+        $ch = curl_init($requestUrl);
         if ($ch === false) {
             $result['error'] = 'Could not start update check.';
             return $result;
@@ -74,7 +88,8 @@ final class PluginSwitchRelease
             CURLOPT_FOLLOWLOCATION=>false,
             CURLOPT_CONNECTTIMEOUT=>3,
             CURLOPT_TIMEOUT=>8,
-            CURLOPT_USERAGENT=>'Plugin-Switch-update-check/1',
+            CURLOPT_USERAGENT=>'Plugin-Switch-update-check/2',
+            CURLOPT_HTTPHEADER=>['Cache-Control: no-cache', 'Pragma: no-cache'],
             CURLOPT_WRITEFUNCTION=>static function ($curl, string $chunk) use (&$payload): int {
                 if (strlen($payload) + strlen($chunk) > 262144) return 0;
                 $payload .= $chunk;
@@ -85,6 +100,8 @@ final class PluginSwitchRelease
         $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
+        $result['http_status'] = $status;
+        $result['duration_ms'] = (int)round((microtime(true) - $started) * 1000);
         if ($ok !== true || $status !== 200) {
             $result['error'] = 'Update check failed (HTTP ' . $status . '): ' . substr($error, 0, 100);
             return $result;
@@ -94,8 +111,9 @@ final class PluginSwitchRelease
             $result['error'] = 'Release manifest has no recognized version.';
             return $result;
         }
-        // Keep diagnostics consistent with Unraid's native third-party strcmp() check.
         $result['available'] = self::isNewer($result['latest_version'], $result['installed_version']);
+        $result['native_available'] = self::nativeUpdateVisible($result['latest_version'], $result['installed_version']);
+        $result['manual_refresh_recommended'] = $result['available'] && !$result['native_available'];
         $result['error'] = null;
         $dir = dirname($this->cache);
         if (is_dir($dir) || @mkdir($dir, 0700, true)) {

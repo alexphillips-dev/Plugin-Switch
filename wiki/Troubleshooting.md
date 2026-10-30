@@ -39,7 +39,7 @@ This is currently expected for most third-party plugins. **ON = installed/regist
 
 ## Update not detected
 
-Use **Check updates** to compare installed and published versions on the pinned channel. See [Updates & Release Channels](Updates-and-Release-Channels). Verify the installed `pluginURL` actually points to `dev`. Unraid and Plugin Switch use distinct checks/caches.
+Use **Check updates** to compare installed and published versions, including their native-Unraid visibility and response diagnostics. Plugin Switch follows FolderView Plus's numeric version check; Unraid's third-party plugin manager uses string ordering. See [Updates & Release Channels](Updates-and-Release-Channels). Verify `pluginURL` points to `dev`. If the native update is hidden by legacy patch formatting or an abandoned development build, use the copyable forced-refresh helper to install the reviewed, cache-busted manifest. Confirm that both the `.plg` and its versioned `.txz` archive are available on the same branch.
 
 ## Plugin reports “Adapter error”
 

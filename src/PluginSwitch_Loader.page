@@ -1,0 +1,8 @@
+Menu="Buttons:105"
+Link="nav-user"
+---
+<?php
+// This page is rendered by the Unraid WebGUI on each page with nav-user.
+// The script is isolated and only touches the installed Plugins table.
+?>
+<script src="/plugins/plugin.switch/switch.js?v=20261029" defer></script>

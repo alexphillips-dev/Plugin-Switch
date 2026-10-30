@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Generate a self-contained Unraid .plg from checked-in sources."""
+from pathlib import Path
+from xml.sax.saxutils import escape
+import argparse
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+VERSION = "2026.10.29-dev1"
+SOURCE_FILES = {
+    "src/Controller.php": "Controller.php",
+    "src/api.php": "api.php",
+    "src/switch.js": "switch.js",
+    "src/PluginSwitch_Loader.page": "PluginSwitch_Loader.page",
+}
+def build():
+    begin = '''<?xml version="1.0" standalone="yes"?>
+<!DOCTYPE PLUGIN [
+<!ENTITY name "plugin.switch">
+<!ENTITY author "Alex Phillips">
+<!ENTITY version "2026.10.29-dev1">
+<!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
+]>
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0">
+<CHANGES>2026.10.29-dev1 - Initial development release: safe per-plugin runtime toggles.</CHANGES>
+'''
+    parts = [begin]
+    for path, name in SOURCE_FILES.items():
+        content = (ROOT / path).read_text()
+        # CDATA cannot contain a raw ]]> sequence.
+        content = content.replace("]]>", "]]]]><![CDATA[>")
+        parts.append(f'<FILE Name="/usr/local/emhttp/plugins/&name;/{name}"><INLINE><![CDATA[{content}]]></INLINE></FILE>\n')
+    parts.append('''<FILE Run="/bin/bash"><INLINE><![CDATA[
+set -eu
+mkdir -p /boot/config/plugins/plugin.switch/adapters
+mkdir -p /boot/config/plugins/plugin.switch/disabled
+mkdir -p /usr/local/emhttp/plugins/plugin.switch
+chmod 0700 /boot/config/plugins/plugin.switch/adapters /boot/config/plugins/plugin.switch/disabled
+]]></INLINE></FILE>
+<FILE Run="/bin/bash" Method="remove"><INLINE><![CDATA[
+# Do not delete persisted adapters or disabled plugin definitions.
+rm -rf /usr/local/emhttp/plugins/plugin.switch
+]]></INLINE></FILE>
+</PLUGIN>
+''')
+    return ''.join(parts)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    target = ROOT / "plugin.switch.plg"
+    value = build()
+    if args.check:
+        if not target.exists() or target.read_text() != value:
+            print("plugin.switch.plg is out of date", file=sys.stderr)
+            sys.exit(1)
+        print("Manifest current")
+    else:
+        target.write_text(value)
+        print(f"Wrote {target}")

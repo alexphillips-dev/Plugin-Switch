@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """Generate a self-contained Unraid .plg from checked-in sources."""
 from pathlib import Path
-from xml.sax.saxutils import escape
+from datetime import date
+import re
 import argparse
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "2026.10.29-dev1"
+VERSION = "2026.10.29.1"
+
+def validate_version(version: str) -> None:
+    if not re.fullmatch(r"[0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]+", version):
+        raise ValueError("Version must follow YYYY.MM.DD.patch")
+    year, month, day, patch = map(int, version.split("."))
+    date(year, month, day)
+    if patch < 1:
+        raise ValueError("Patch numbers begin at 1")
+
 SOURCE_FILES = {
     "src/Controller.php": "Controller.php",
     "src/api.php": "api.php",
@@ -14,15 +24,16 @@ SOURCE_FILES = {
     "src/PluginSwitch_Loader.page": "PluginSwitch_Loader.page",
 }
 def build():
-    begin = '''<?xml version="1.0" standalone="yes"?>
+    validate_version(VERSION)
+    begin = f'''<?xml version="1.0" standalone="yes"?>
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
 <!ENTITY author "Alex Phillips">
-<!ENTITY version "2026.10.29-dev1">
+<!ENTITY version "{VERSION}">
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0">
-<CHANGES>2026.10.29-dev1 - Initial development release: safe per-plugin runtime toggles.</CHANGES>
+<CHANGES>{VERSION} - Correct installed-state display, add adapter support diagnostics, and enforce Unraid version numbering.</CHANGES>
 '''
     parts = [begin]
     for path, name in SOURCE_FILES.items():

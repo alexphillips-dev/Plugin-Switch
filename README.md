@@ -1,5 +1,8 @@
 # Plugin Switch (development preview — 2026.10.29.10)
 
+> **Documentation:** [GitHub Wiki](https://github.com/alexphillips-dev/Plugin-Switch/wiki) · [Version-controlled Wiki pages](wiki/Home.md) · [Safety & Recovery](wiki/Safety-and-Recovery.md) · [Troubleshooting](wiki/Troubleshooting.md)
+
+
 Adds an **Enabled** column to Unraid's existing **Plugins** tab. Designed for true **live** start/stop of plugins that expose a trustworthy runtime control adapter, rather than misleading everyone with a generic ON/OFF switch.
 
 > **Development build — do not deploy to a production Unraid host without lab validation.**

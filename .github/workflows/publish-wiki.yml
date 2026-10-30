@@ -1,0 +1,77 @@
+name: Publish Plugin Switch Wiki
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'wiki/**'
+      - 'wiki-bootstrap.tar.gz'
+      - 'tools/wiki_validate.py'
+      - '.github/workflows/publish-wiki.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-plugin-switch-wiki
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Seed version-controlled Wiki pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f wiki/Home.md ]]; then
+            test -s wiki-bootstrap.tar.gz
+            tar -tzf wiki-bootstrap.tar.gz | grep -qx 'wiki/Home.md'
+            tar -xzf wiki-bootstrap.tar.gz -C .
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add wiki/
+            if ! git diff --cached --quiet; then
+              git commit -m "docs: add version-controlled Plugin Switch Wiki"
+              git push origin HEAD:dev
+            fi
+          fi
+      - name: Validate Wiki source and navigation
+        run: python3 tools/wiki_validate.py wiki
+      - name: Publish pages to GitHub Wiki repository
+        shell: bash
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          test -n "$WIKI_TOKEN"
+          WIKI_REMOTE="https://github.com/${GITHUB_REPOSITORY}.wiki.git"
+          WIKI_DIR="$RUNNER_TEMP/plugin-switch-wiki"
+          ASKPASS="$RUNNER_TEMP/plugin-switch-wiki-askpass.sh"
+          cat > "$ASKPASS" <<'SH'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s' 'x-access-token';;
+            *Password*) printf '%s' "$WIKI_TOKEN";;
+          esac
+          SH
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
+          if ! git clone --quiet "$WIKI_REMOTE" "$WIKI_DIR"; then
+            echo "::error::Wiki not initialized, or token lacks access. Create the first Home page in GitHub's Wiki tab and rerun. If needed, add an Actions secret WIKI_PAT with Wiki access."
+            exit 1
+          fi
+          cp wiki/*.md "$WIKI_DIR/"
+          cd "$WIKI_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.md'
+          if git diff --cached --quiet; then
+            echo "Wiki is already up to date."
+            exit 0
+          fi
+          git commit -m "docs: sync Plugin Switch Wiki from dev"
+          git push --quiet origin HEAD
+          echo "Wiki synchronized."

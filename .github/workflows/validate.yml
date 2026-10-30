@@ -1,0 +1,24 @@
+name: Validate Plugin Switch
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up PHP
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y php-cli php-xml
+      - name: Lint PHP
+        run: |
+          php -l src/Controller.php
+          php -l src/api.php
+      - name: Validate JavaScript
+        run: node --check src/switch.js
+      - name: Validate generated manifest
+        run: |
+          python3 tools/build.py --check
+          python3 -m unittest discover -s tests -v

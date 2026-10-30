@@ -20,14 +20,21 @@ class RequestAndInterfaceTests(unittest.TestCase):
         self.assertIn("method:'POST'", frontend)
         self.assertIn('csrf_token:token', frontend)
 
-    def test_enabled_column_stays_single_line(self):
+    def test_controls_are_isolated_and_modal_is_scrollable(self):
         script = (ROOT / 'src/switch.js').read_text()
-        self.assertIn("class=\"ps-actions\"", script)
-        self.assertIn('class=\"ps-info\"', script)
-        self.assertIn('ps-details', script)
-        self.assertIn('fa-lock', script)
-        self.assertNotIn('ps-state', script)
+        self.assertIn("attachShadow({mode:'open'})", script)
+        self.assertIn('role=\"switch\"', script)
+        self.assertIn('aria-checked="false"', script)
+        self.assertIn('aria-modal="true"', script)
+        self.assertIn('class="overlay"', script)
+        self.assertIn('class="scroll"', script)
+        self.assertIn('overflow-y:auto!important', script)
+        self.assertIn('grid-template-columns:145px minmax(0,1fr)', script)
+        self.assertIn('@media(max-width:540px)', script)
+        self.assertIn("Escape", script)
+        self.assertNotIn('type="checkbox"', script)
         self.assertNotIn('<summary>Why?</summary>', script)
+        self.assertNotIn('ps-evidence-row', script)
 
     @unittest.skipUnless(shutil.which('php'), 'PHP CLI is needed for endpoint checks')
     def test_get_rescan_without_csrf(self):

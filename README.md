@@ -1,4 +1,4 @@
-# Plugin Switch (development preview — 2026.10.29.5)
+# Plugin Switch (development preview — 2026.10.29.6)
 
 Adds an **Enabled** column to Unraid's existing **Plugins** tab. Designed for true **live** start/stop of plugins that expose a trustworthy runtime control adapter, rather than misleading everyone with a generic ON/OFF switch.
 
@@ -141,3 +141,11 @@ Evidence includes candidate service scripts, potential scheduler/kernel/network/
 - Rebuild the dev manifest with `python3 tools/build.py --branch dev`; all files are SHA-256-pinned for reliable upgrades.
 
 Use a hard browser refresh after upgrading if the older table appears cached. Production/real-Unraid testing still required.
+
+## 2026.10.29.6 — Responsive modal and native-theme isolation
+
+The Enabled cell is now a compact **switch plus 15px lock/info icon**, rendered within a Shadow DOM boundary to keep Unraid's global checkbox and button styles from adding unwanted checkmarks, boxes, padding, or layout rules. The switch uses an accessible `role="switch"` button with `aria-checked` rather than a styled HTML checkbox; its ON state still represents installed state, and unsupported controls stay locked.
+
+Clicking the lock/info icon opens a centered, theme-independent modal with a readable plugin title, state badges, clear compatibility explanation, comfortably spaced label/value rows, and a **dedicated scrollable body**. The modal limits its height to the viewport, supports narrow screens with stacked fields, and closes using Escape, the Close button, or clicking outside. This corrects the previous tiny floating panel with compressed vertical lettering and inaccessible scrolling.
+
+UI compatibility details are escaped before insertion; the modal has dialog semantics and keyboard focus handling. Tests verify Shadow DOM isolation, modal structure, responsiveness, and the absence of native checkbox markup.

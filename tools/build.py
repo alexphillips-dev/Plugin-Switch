@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = "2026.10.29.1"
 
 def validate_version(version: str) -> None:
-    if not re.fullmatch(r"[0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]+", version):
+    if not re.fullmatch(r"[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]+", version):
         raise ValueError("Version must follow YYYY.MM.DD.patch")
     year, month, day, patch = map(int, version.split("."))
     date(year, month, day)

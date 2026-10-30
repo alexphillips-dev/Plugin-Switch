@@ -22,20 +22,30 @@
     return map;
   }
   function getStatus(p) {
-    if (!p.supported) return 'No live adapter';
-    return p.runtime === 'enabled' ? 'Running' : p.runtime === 'disabled' ? 'Stopped' : 'Unknown';
+    // Installed/parked state is independent of runtime controllability.
+    switch (p.support) {
+      case 'no-adapter': return 'No live control';
+      case 'invalid-adapter': return 'Adapter blocked';
+      case 'status-error': return 'Adapter error';
+      case 'restore-only': return 'Restore available';
+    }
+    if (!p.enabled) return p.runtime === 'enabled' ? 'Still running' : 'Disabled';
+    return p.runtime === 'enabled' ? 'Live ready' : 'Service stopped';
   }
   function makeCell(p) {
     const label = p.enabled ? 'Disable' : 'Enable';
     const disabled = !p.supported;
-    const reason = disabled ? p.reason : label + ' ' + p.name;
-    const checked = p.runtime === 'enabled' ? ' checked' : '';
+    const reason = (p.enabled ? 'Installed at boot' : 'Parked / not loaded at boot') +
+      '. ' + (p.reason || (label + ' ' + p.name));
+    const checked = p.enabled ? ' checked' : '';
     return '<td class="ps-cell" data-plugin-switch="' + escapeHtml(p.id) + '">' +
       '<label class="ps-control" title="' + escapeHtml(reason) + '">' +
       '<input type="checkbox" class="ps-toggle" aria-label="' + escapeHtml(label + ' ' + p.name) +
       '" data-id="' + escapeHtml(p.id) + '"' + checked + (disabled ? ' disabled' : '') + '>' +
       '<span class="ps-track"></span></label>' +
-      '<small class="ps-state">' + escapeHtml(getStatus(p)) + '</small></td>';
+      '<small class="ps-state">' + escapeHtml(getStatus(p)) + '</small>' +
+      '<span class="ps-help" role="img" aria-label="' + escapeHtml(reason) +
+      '" title="' + escapeHtml(reason) + '">ⓘ</span></td>';
   }
   function addHeader(t) {
     const header = t.querySelector('thead tr');
@@ -43,6 +53,7 @@
     const th = document.createElement('th');
     th.className = 'ps-head';
     th.textContent = 'Enabled';
+    th.title = 'ON means installed; OFF means parked. Live control requires a verified adapter. Hover the info symbol for details.';
     // Append as final column so native tablesorter column mappings remain stable.
     header.appendChild(th);
   }
@@ -58,8 +69,9 @@
       '.ps-toggle:checked+.ps-track{background:#278d63}' +
       '.ps-toggle:checked+.ps-track:after{transform:translateX(18px)}' +
       '.ps-toggle:focus-visible+.ps-track{outline:2px solid #378aff;outline-offset:2px}' +
-      '.ps-toggle:disabled+.ps-track{opacity:.33;cursor:not-allowed}' +
+      '.ps-toggle:disabled+.ps-track{opacity:.68;cursor:not-allowed}' +
       '.ps-state{display:block;white-space:nowrap;margin-top:3px;font-size:10px}' +
+      '.ps-help{font-size:12px;cursor:help;margin-left:4px;opacity:.7}' +
       '.ps-note{color:inherit;opacity:.8;font-size:12px}' +
       '.ps-disabled-row td{opacity:.8}' +
       '.ps-disabled-row td.ps-cell{opacity:1}';
@@ -103,11 +115,20 @@
       const toggle = cell.querySelector('input.ps-toggle');
       if (document.activeElement === toggle || toggle?.dataset.busy) return;
       if (toggle) {
-        toggle.checked = p.runtime === 'enabled';
+        toggle.checked = p.enabled;
+        const label = cell.querySelector('.ps-control');
+        const reason = (p.enabled ? 'Installed at boot' : 'Parked / not loaded at boot') +
+          '. ' + (p.reason || '');
+        if (label && label.title !== reason) label.title = reason;
+        const help = cell.querySelector('.ps-help');
+        if (help) {
+          if (help.title !== reason) help.title = reason;
+          if (help.getAttribute('aria-label') !== reason) help.setAttribute('aria-label', reason);
+        }
         toggle.disabled = !p.supported;
       }
       const status = cell.querySelector('.ps-state');
-      if (status) status.textContent = getStatus(p);
+      if (status && status.textContent !== getStatus(p)) status.textContent = getStatus(p);
     });
     // Fixed-width placeholders and tablesorter may need adjustment after a new column.
     t.querySelectorAll('tbody td[colspan="6"]').forEach(td => td.colSpan = 7);

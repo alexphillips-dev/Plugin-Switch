@@ -3,12 +3,13 @@
 from pathlib import Path
 from datetime import date
 import argparse
+import hashlib
 import os
 import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "2026.10.29.2"
+VERSION = "2026.10.29.3"
 CHANNELS = ("dev", "main")
 SOURCE_FILES = {
     "src/Controller.php": "Controller.php",
@@ -45,15 +46,24 @@ def build(branch: str = "dev") -> str:
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/{branch}/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>{VERSION} - Branch-aware install/update URLs, display name, GitHub author, and plugin description.</CHANGES>
+<CHANGES>{VERSION} - Fix Unraid install/update file refresh with verified SHA-256 payloads.</CHANGES>
 '''
     parts = [begin]
     for path, name in SOURCE_FILES.items():
         content = (ROOT / path).read_text(encoding="utf-8")
         if path == "src/README.md":
             content = content.replace("__PLUGIN_SWITCH_BRANCH__", branch)
+        # Unraid skips an existing FILE when no digest is provided. Without a
+        # SHA256 entry, upgrading only updates the manifest and leaves old
+        # PHP/JS/README files on disk. Match Unraid's trim(INLINE).PHP_EOL.
+        payload = content.strip() + "\n"
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         content = content.replace("]]>", "]]]]><![CDATA[>")
-        parts.append(f'<FILE Name="/usr/local/emhttp/plugins/&name;/{name}"><INLINE><![CDATA[{content}]]></INLINE></FILE>\n')
+        parts.append(
+            f'<FILE Name="/usr/local/emhttp/plugins/&name;/{name}">'
+            f'<INLINE><![CDATA[{content}]]></INLINE>'
+            f'<SHA256>{digest}</SHA256></FILE>\n'
+        )
     parts.append('''<FILE Run="/bin/bash"><INLINE><![CDATA[
 set -eu
 mkdir -p /boot/config/plugins/plugin.switch/adapters

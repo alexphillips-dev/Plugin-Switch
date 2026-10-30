@@ -1,5 +1,6 @@
 import unittest
 import os
+import hashlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import importlib.util
@@ -17,8 +18,23 @@ class BuildTests(unittest.TestCase):
         root = ET.fromstring(build.build())
         self.assertEqual(root.tag, 'PLUGIN')
         self.assertEqual(len(root.findall('FILE')), 7)
+    def test_inline_file_checksums_for_unraid_updates(self):
+        root = ET.fromstring(build.build("dev"))
+        named = [entry for entry in root.findall("FILE") if entry.attrib.get("Name")]
+        self.assertGreater(len(named), 0)
+        for entry in named:
+            with self.subTest(file=entry.attrib["Name"]):
+                inline = entry.findtext("INLINE")
+                declared = entry.findtext("SHA256")
+                self.assertIsNotNone(inline)
+                self.assertRegex(declared or "", r"^[0-9a-f]{64}$")
+                # Unraid writes trim(INLINE).PHP_EOL before checking the
+                # checksum on a later install/update.
+                expected = hashlib.sha256((inline.strip() + "\n").encode("utf-8")).hexdigest()
+                self.assertEqual(declared, expected)
+
     def test_unraid_version_policy(self):
-        self.assertEqual(build.VERSION, "2026.10.29.2")
+        self.assertEqual(build.VERSION, "2026.10.29.3")
         build.validate_version(build.VERSION)
         self.assertIn(f'<!ENTITY version "{build.VERSION}">', build.build())
         for invalid in ("2026.10.29-dev1", "2026.13.29.1", "2026.02.30.1",

@@ -2,11 +2,11 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
 <!ENTITY author "alexphillips-dev">
-<!ENTITY version "2026.10.29.2">
+<!ENTITY version "2026.10.29.3">
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>2026.10.29.2 - Branch-aware install/update URLs, display name, GitHub author, and plugin description.</CHANGES>
+<CHANGES>2026.10.29.3 - Fix Unraid install/update file refresh with verified SHA-256 payloads.</CHANGES>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Controller.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 
@@ -287,7 +287,7 @@ final class PluginSwitchController
         }
     }
 }
-]]></INLINE></FILE>
+]]></INLINE><SHA256>677494dd3d38d7b1a2d7bb2dbcad19b1e96178f9d97b43fa6d9b0ea629ecc32b</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/api.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
@@ -323,7 +323,7 @@ try {
 } catch (Throwable $e) {
     respond(409, ['error' => $e->getMessage()]);
 }
-]]></INLINE></FILE>
+]]></INLINE><SHA256>b64c522ca3f10cd35cd2d3157f645cf860a9748e36ed97e710c1b38e8e81370e</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/switch.js"><INLINE><![CDATA[(function () {
   'use strict';
   const api = '/plugins/plugin.switch/api.php';
@@ -532,7 +532,7 @@ try {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',init);
   else init();
 })();
-]]></INLINE></FILE>
+]]></INLINE><SHA256>360baaa5a9f4eb8d68711e6740b9084cb64a796b78ee8264313e7888490eac41</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/PluginSwitch_Loader.page"><INLINE><![CDATA[Menu="Buttons:105"
 Link="nav-user"
 ---
@@ -542,13 +542,13 @@ Link="nav-user"
 $asset = (string)@filemtime('/usr/local/emhttp/plugins/plugin.switch/switch.js');
 ?>
 <script src="/plugins/plugin.switch/switch.js?v=<?= htmlspecialchars($asset, ENT_QUOTES) ?>" defer></script>
-]]></INLINE></FILE>
+]]></INLINE><SHA256>f49abfda4d39a47a0bf5d9838bf5e9f66d8965ed3d371e4e8e4d1c123667b172</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/README.md"><INLINE><![CDATA[**Plugin Switch**
 
 Manage plugins from Unraid's existing **Plugins** tab with an Enabled toggle. Supported plugins can be safely stopped and restarted without uninstalling them; settings are preserved. Plugins without a verified live-control adapter remain installed, with their toggle locked and an explanation shown.
 
 **Update channel:** `dev`. Updates follow the same GitHub branch used for installation.
-]]></INLINE></FILE>
+]]></INLINE><SHA256>6738a3bddd84825ed77985a623b5c501d911d5ef0fccbbc0e5ca8b02efdc5f55</SHA256></FILE>
 <FILE Run="/bin/bash"><INLINE><![CDATA[
 set -eu
 mkdir -p /boot/config/plugins/plugin.switch/adapters

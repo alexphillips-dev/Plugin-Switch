@@ -35,6 +35,28 @@ The internal plugin ID **must remain `plugin.switch`** so existing installations
 
 `tools/build.py --check --branch dev` (or `main`) verifies that the pinned manifest matches its intended branch.
 
+### If the dev install URL does not work
+
+The development manifest is a **raw XML .plg file**, not a graphical installer. In Unraid, open **Plugins → Install Plugin**, paste the URL exactly, and select **Install**. Do not paste a GitHub `/blob/` or `/tree/` page.
+
+```text
+https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg
+```
+
+If it still fails, run these diagnostic commands from the **Unraid terminal**:
+
+```bash
+curl -fL --connect-timeout 10 --max-time 30 \
+  -o /tmp/plugin.switch-download.plg \
+  https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg
+head -n 8 /tmp/plugin.switch-download.plg
+plugin install /tmp/plugin.switch-download.plg
+```
+
+The first command must download XML beginning with `<?xml`. The installer output should include a concrete error if it fails. You can also check `/var/log/syslog` for `plugin-manager` messages. If the download fails, check Unraid DNS, HTTPS access, and filtering of `raw.githubusercontent.com`. Do not disable DNS/security filtering broadly to work around a plugin install.
+
+**Upgrade fix in 2026.10.29.3:** All embedded files now carry SHA-256 hashes. Unraid's installer otherwise skips files that already exist, leaving older PHP and JavaScript in place even when the plugin version advances. The manifest is still branch-pinned to `dev`.
+
 ## How Plugin Switch determines support
 
 **All installed plugins show ON by default**, because they are registered with Unraid and scheduled to load at boot. That does not imply they can be safely paused. The support label under each toggle is a separate assessment:

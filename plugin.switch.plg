@@ -2,11 +2,11 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "plugin.switch">
 <!ENTITY author "alexphillips-dev">
-<!ENTITY version "2026.10.29.6">
+<!ENTITY version "2026.10.29.7">
 <!ENTITY pluginURL "https://raw.githubusercontent.com/alexphillips-dev/Plugin-Switch/dev/plugin.switch.plg">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" icon="fa-toggle-on" min="7.0.0" support="https://github.com/alexphillips-dev/Plugin-Switch/issues">
-<CHANGES>2026.10.29.6 - Replace Unraid-styled controls with isolated toggles and readable compatibility modal.</CHANGES>
+<CHANGES>2026.10.29.7 - Center toggle and lock group within the Unraid Plugins column.</CHANGES>
 <FILE Name="/usr/local/emhttp/plugins/&name;/Compatibility.php"><INLINE><![CDATA[<?php
 declare(strict_types=1);
 
@@ -706,8 +706,18 @@ try {
     cell.style.setProperty('vertical-align','middle','important');
     cell.style.setProperty('min-width','92px');
     cell.style.setProperty('width','100px');
+    // Unraid applies asymmetric padding/alignment to the last Plugins column.
+    // Use the actual cell box as the positioning reference instead of the
+    // text content box, so the whole toggle + lock group is truly centered.
+    cell.style.setProperty('position','relative','important');
+    cell.style.setProperty('padding-left','0','important');
+    cell.style.setProperty('padding-right','0','important');
     const host = document.createElement('span');
     host.className = 'ps-controls-host';
+    host.style.setProperty('position','absolute','important');
+    host.style.setProperty('left','50%','important');
+    host.style.setProperty('top','50%','important');
+    host.style.setProperty('transform','translate(-50%, -50%)','important');
     const root = host.attachShadow({mode:'open'});
     root.innerHTML = '<style>'+controlsCSS+'</style><div class="actions">'+
       '<button type="button" class="switch" role="switch" aria-checked="false">'+
@@ -958,7 +968,7 @@ try {
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',init);
   else init();
 })();
-]]></INLINE><SHA256>018a9ebcff6ce0dec4f1c6f6a2a4380a81c0d9af9a923c6f7975afae7e76fcd3</SHA256></FILE>
+]]></INLINE><SHA256>8ee58f1d46c0e52910b8c0c359989c8717b45bfd0252e53cf0a2aba547a62efc</SHA256></FILE>
 <FILE Name="/usr/local/emhttp/plugins/&name;/PluginSwitch_Loader.page"><INLINE><![CDATA[Menu="Buttons:105"
 Link="nav-user"
 ---

@@ -146,8 +146,18 @@
     cell.style.setProperty('vertical-align','middle','important');
     cell.style.setProperty('min-width','92px');
     cell.style.setProperty('width','100px');
+    // Unraid applies asymmetric padding/alignment to the last Plugins column.
+    // Use the actual cell box as the positioning reference instead of the
+    // text content box, so the whole toggle + lock group is truly centered.
+    cell.style.setProperty('position','relative','important');
+    cell.style.setProperty('padding-left','0','important');
+    cell.style.setProperty('padding-right','0','important');
     const host = document.createElement('span');
     host.className = 'ps-controls-host';
+    host.style.setProperty('position','absolute','important');
+    host.style.setProperty('left','50%','important');
+    host.style.setProperty('top','50%','important');
+    host.style.setProperty('transform','translate(-50%, -50%)','important');
     const root = host.attachShadow({mode:'open'});
     root.innerHTML = '<style>'+controlsCSS+'</style><div class="actions">'+
       '<button type="button" class="switch" role="switch" aria-checked="false">'+

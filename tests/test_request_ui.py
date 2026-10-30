@@ -36,6 +36,17 @@ class RequestAndInterfaceTests(unittest.TestCase):
         self.assertNotIn('<summary>Why?</summary>', script)
         self.assertNotIn('ps-evidence-row', script)
 
+    def test_toggle_group_centered_inside_actual_table_cell(self):
+        script = (ROOT / 'src/switch.js').read_text()
+        self.assertIn("cell.style.setProperty('position','relative','important')", script)
+        self.assertIn("cell.style.setProperty('padding-left','0','important')", script)
+        self.assertIn("cell.style.setProperty('padding-right','0','important')", script)
+        self.assertIn("host.style.setProperty('position','absolute','important')", script)
+        self.assertIn("host.style.setProperty('left','50%','important')", script)
+        self.assertIn("host.style.setProperty('top','50%','important')", script)
+        self.assertIn("host.style.setProperty('transform','translate(-50%, -50%)','important')", script)
+        self.assertIn(".actions{display:flex;align-items:center;justify-content:center;", script)
+
     @unittest.skipUnless(shutil.which('php'), 'PHP CLI is needed for endpoint checks')
     def test_get_rescan_without_csrf(self):
         code = '''$_SERVER["REQUEST_METHOD"]="GET";

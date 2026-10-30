@@ -12,9 +12,9 @@
   const lock = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>';
   const info = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>';
   const controlsCSS = `
-    :host{display:inline-block;width:86px;height:26px;vertical-align:middle;color:#aeb8c6}
+    :host{display:block;width:68px;height:26px;vertical-align:middle;color:#aeb8c6}
     *,*::before,*::after{box-sizing:border-box}
-    .actions{display:flex;align-items:center;justify-content:center;gap:9px;height:26px}
+    .actions{display:flex;align-items:center;justify-content:flex-start;gap:9px;height:26px}
     button{all:unset;box-sizing:border-box}
     .switch{position:relative;flex:0 0 39px;width:39px;height:22px;border-radius:999px;
       background:#6b7480;cursor:pointer;transition:background .15s}
@@ -142,22 +142,22 @@
     const cell = document.createElement('td');
     cell.className = 'ps-cell';
     cell.dataset.pluginSwitch = p.id;
-    cell.style.setProperty('text-align','center','important');
+    cell.style.setProperty('text-align','left','important');
     cell.style.setProperty('vertical-align','middle','important');
     cell.style.setProperty('min-width','92px');
     cell.style.setProperty('width','100px');
-    // Unraid applies asymmetric padding/alignment to the last Plugins column.
-    // Use the actual cell box as the positioning reference instead of the
-    // text content box, so the whole toggle + lock group is truly centered.
+    // Align the controls to a fixed inset from the cell's left edge.
+    // Unraid's native table sizing/padding can otherwise visually shift
+    // centered elements right of the Enabled header.
     cell.style.setProperty('position','relative','important');
     cell.style.setProperty('padding-left','0','important');
     cell.style.setProperty('padding-right','0','important');
     const host = document.createElement('span');
     host.className = 'ps-controls-host';
     host.style.setProperty('position','absolute','important');
-    host.style.setProperty('left','50%','important');
+    host.style.setProperty('left','12px','important');
     host.style.setProperty('top','50%','important');
-    host.style.setProperty('transform','translate(-50%, -50%)','important');
+    host.style.setProperty('transform','translateY(-50%)','important');
     const root = host.attachShadow({mode:'open'});
     root.innerHTML = '<style>'+controlsCSS+'</style><div class="actions">'+
       '<button type="button" class="switch" role="switch" aria-checked="false">'+

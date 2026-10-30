@@ -1,4 +1,4 @@
-# Plugin Switch (development preview — 2026.10.29.7)
+# Plugin Switch (development preview — 2026.10.29.8)
 
 Adds an **Enabled** column to Unraid's existing **Plugins** tab. Designed for true **live** start/stop of plugins that expose a trustworthy runtime control adapter, rather than misleading everyone with a generic ON/OFF switch.
 
@@ -153,3 +153,7 @@ UI compatibility details are escaped before insertion; the modal has dialog sema
 ## 2026.10.29.7 — Center the Enabled cell controls
 
 The toggle and adjacent lock/info icon are positioned together at the **true center of each Enabled table cell** instead of relying on the native table column's asymmetric padding and inherited alignment. This changes only the Enabled column layout; the accessible switch behavior, compatibility scanner, and modal remain unchanged. Added regression coverage for cell positioning and horizontal/vertical centering.
+
+## 2026.10.29.8 — Explicit left alignment
+
+The Enabled cell now places the **switch + lock/info icon 12px from the left side of the cell**, rather than centering it using a percentage-based absolute position. The isolated group is a fixed 68px wide, uses `justify-content:flex-start`, and remains vertically centered. This avoids inherited Unraid table padding and gives a visible leftward adjustment. The compatibility modal and control semantics are unchanged.

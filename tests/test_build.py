@@ -34,7 +34,7 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(declared, expected)
 
     def test_unraid_version_policy(self):
-        self.assertEqual(build.VERSION, "2026.10.29.7")
+        self.assertEqual(build.VERSION, "2026.10.29.8")
         build.validate_version(build.VERSION)
         self.assertIn(f'<!ENTITY version "{build.VERSION}">', build.build())
         for invalid in ("2026.10.29-dev1", "2026.13.29.1", "2026.02.30.1",

@@ -25,7 +25,11 @@ for name, page in sorted(pages.items()):
 home = pages.get('Home')
 if home:
     body = home.read_text(encoding='utf-8')
-    for term in ('empty', '2026.10.29.10', 'Safety & Recovery'):
+    builder = root.parent / 'tools' / 'build.py'
+    current = re.search(r'^VERSION = "([^"]+)"', builder.read_text(encoding='utf-8'), re.M) if builder.is_file() else None
+    if not current:
+        errors.append('Could not determine current build version from tools/build.py')
+    for term in ('empty', 'Safety & Recovery', *([current.group(1)] if current else [])):
         if term not in body: errors.append(f'Home missing warning: {term}')
 if errors:
     print('\n'.join(errors), file=sys.stderr)

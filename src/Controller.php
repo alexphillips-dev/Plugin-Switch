@@ -51,22 +51,28 @@ final class PluginSwitchController
         ];
     }
 
-    private function adapter(string $id): ?string
+    /**
+     * Do not infer compatibility from plugin names, daemon names or manifest
+     * contents. A trusted adapter is the only opt-in live-control interface.
+     * Report WHY a plugin is unsupported instead of calling it disabled.
+     *
+     * @return array{0: ?string, 1: string, 2: string}
+     */
+    private function adapterInfo(string $id): array
     {
         $name = substr($id, 0, -4);
         $file = $this->adapters . '/' . $name . '.sh';
-        if (!is_file($file) || is_link($file) || filesize($file) > 65536) {
-            return null;
+        if (!file_exists($file) && !is_link($file)) {
+            return [null, 'no-adapter', 'No trusted live-control adapter is installed. The plugin remains installed and enabled.'];
+        }
+        if (is_link($file) || !is_file($file) || filesize($file) === 0 || filesize($file) > 65536) {
+            return [null, 'invalid-adapter', 'Adapter is not a regular file or exceeds the allowed size.'];
         }
         $mode = fileperms($file);
-        if ($mode === false || ($mode & 0022) !== 0) {
-            return null;
+        if ($mode === false || ($mode & 0022) !== 0 || fileowner($file) !== 0) {
+            return [null, 'invalid-adapter', 'Adapter must be root-owned and not writable by group or others.'];
         }
-        // On Unraid, adapters must be installed by root, not uploaded by the browser.
-        if (fileowner($file) !== 0) {
-            return null;
-        }
-        return $file;
+        return [$file, 'available', 'Trusted adapter detected; runtime status verified.'];
     }
 
     private function execute(array $args, int $timeout = 15): array
@@ -127,14 +133,18 @@ final class PluginSwitchController
                 $version = (string)($xml['version'] ?? '');
             }
         }
-        $script = $this->adapter($id);
-        $reason = $script ? '' : 'No trusted live-control adapter is installed for this plugin.';
+        [$script, $support, $reason] = $this->adapterInfo($id);
         $runtime = 'unknown';
-        if ($script) {
+        if ($script !== null) {
             try {
                 $runtime = $this->state($script);
             } catch (Throwable $e) {
-                $reason = $e->getMessage();
+                // A parked plugin may need its files installed before its
+                // adapter can report status. Restore remains possible.
+                $support = $enabled ? 'status-error' : 'restore-only';
+                $reason = $enabled
+                    ? 'Adapter status check failed: ' . $e->getMessage()
+                    : 'Plugin is parked. Re-enable restores its files before checking runtime status.';
             }
         }
         return [
@@ -144,6 +154,7 @@ final class PluginSwitchController
             'version' => $version,
             'enabled' => $enabled,
             'runtime' => $runtime,
+            'support' => $support,
             'supported' => $script !== null && (!$enabled || $runtime !== 'unknown'),
             'reason' => $reason,
         ];
@@ -189,9 +200,9 @@ final class PluginSwitchController
             throw new RuntimeException('Could not lock plugin operations.');
         }
         try {
-            $script = $this->adapter($id);
+            [$script, , $adapterReason] = $this->adapterInfo($id);
             if ($script === null) {
-                throw new RuntimeException('Live control requires a trusted plugin-specific adapter.');
+                throw new RuntimeException($adapterReason);
             }
             if ($enable) {
                 if (!is_file($disabled) || is_link($disabled) || file_exists($active)) {
